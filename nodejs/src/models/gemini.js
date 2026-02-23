@@ -15,7 +15,7 @@ class GeminiAdapter extends ModelAdapter {
 
     async waitForResponse(messageCount) {
         let attempts = 0;
-        while (attempts < 40) {
+        while (attempts < 100) {
             await this.page.waitForTimeout(300);
             const messages = await this.page.$$(this.getResponseSelector());
             if (messages.length > messageCount) {

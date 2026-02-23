@@ -1,21 +1,29 @@
 const { firefox } = require('playwright');
 
 class BrowserManager {
-    constructor() {
+    constructor(headless = true) {
         this.browser = null;
-        this.page = null;
+        this.context = null;
+        this.headless = headless;
     }
 
     async launch() {
-        this.browser = await firefox.launch({ headless: true });
-        const context = await this.browser.newContext({
-            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1"
+        this.browser = await firefox.launch({ 
+            headless: this.headless,
+            args: ['--no-sandbox']
         });
-        this.page = await context.newPage();
-        return this.page;
+        
+        this.context = await this.browser.newContext({
+            userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport: { width: 1280, height: 720 }
+        });
+        
+        const page = await this.context.newPage();
+        return page;
     }
 
     async close() {
+        if (this.context) await this.context.close();
         if (this.browser) await this.browser.close();
     }
 }

@@ -1,13 +1,19 @@
 const os = require('os');
 
 class MessageHandler {
-    constructor(model, session) {
+    constructor(model, session, agentPrompt = null) {
         this.model = model;
         this.session = session;
         this.messageCount = 0;
+        this.agentPrompt = agentPrompt;
     }
 
     getSystemContext() {
+        if (this.agentPrompt) {
+            return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${this.session.workingDir}]
+
+${this.agentPrompt}`;
+        }
         return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${this.session.workingDir}]
 [INSTRUCTION: Format shell commands in bash code blocks. Keep responses concise and technical.]`;
     }
