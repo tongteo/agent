@@ -55,11 +55,6 @@ AUTO_EXEC=true node chat.js
 - [ ] Add plugin system
 - [ ] Add logging
 
-## Documentation
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture overview
-- [REFACTOR.md](REFACTOR.md) - Technical details
-
 ## License
 
 MIT
