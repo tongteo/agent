@@ -1,0 +1,22 @@
+{
+  "name": "chatgpt-cli",
+  "version": "1.0.0",
+  "description": "Modern CLI for ChatGPT without login",
+  "main": "chat.js",
+  "bin": {
+    "chatgpt-cli": "./bin/chatgpt",
+    "gemini-cli": "./bin/gemini",
+    "chatgpt-stdin": "./bin/chatgpt-stdin",
+    "gemini-stdin": "./bin/gemini-stdin"
+  },
+  "scripts": {
+    "start": "node chat.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "ora": "^5.4.1",
+    "playwright": "^1.58.2",
+    "node-pty": "^1.0.0",
+    "cli-highlight": "^2.1.11"
+  }
+}
