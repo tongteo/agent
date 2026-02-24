@@ -355,7 +355,7 @@ class ToolRegistry {
         }, 'Delegate tasks to subagents. Params: {"command": "InvokeSubagents", "content": {"subagents": [{"query": "task", "agent_name": "default", "relevant_context": "..."}]}}');
 
         // Execute tool
-        this.register('execute', async ({ file, args = '' }) => {
+        this.register('execute', async ({ file, args = '', stdin = '' }) => {
             try {
                 const ext = file.split('.').pop();
                 let cmd;
@@ -385,18 +385,25 @@ class ToolRegistry {
                     return `Error: Unsupported file type: ${ext}`;
                 }
                 
-                const result = execSync(cmd, {
+                const options = {
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
                     cwd: process.cwd()
-                });
+                };
+                
+                // Add stdin if provided
+                if (stdin) {
+                    options.input = stdin;
+                }
+                
+                const result = execSync(cmd, options);
                 
                 return result || '(no output)';
             } catch (e) {
                 return `Error: ${e.message}\n${e.stderr || ''}`;
             }
-        }, 'Compile and execute code file. Params: {"file": "main.py", "args": "arg1 arg2"}');
+        }, 'Compile and execute code file. Params: {"file": "main.py", "args": "arg1 arg2", "stdin": "input data"}');
 
         // Advanced debugging tools
         this.register('bash', async ({ command, working_dir }) => {
