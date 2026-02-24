@@ -52,11 +52,13 @@ openrouter-cli --agent
 # Show current model
 /model
 
-# Switch to different model
+# Switch to different model (use Tab for autocomplete)
 /model openai/gpt-oss-120b:free
 /model z-ai/glm-4.5-air:free
 /model stepfun/step-3.5-flash:free
 ```
+
+**Tip:** Press `Tab` to autocomplete commands and model names!
 
 ### Environment Variables
 ```bash

@@ -43,7 +43,8 @@ class ChatBot {
         }
         
         console.log(`✓ Ready! Using ${chalk.bold(this.modelName)}${mode}`);
-        console.log(chalk.gray(`  Commands: 'exit' to quit | 'clear' to reset | '/model <name>' to change model\n`));
+        console.log(chalk.gray(`  Commands: 'exit' to quit | 'clear' to reset | '/model <name>' to change model`));
+        console.log(chalk.gray(`  Tip: Press Tab for autocomplete\n`));
         if (this.session.workingDir !== process.cwd()) {
             console.log(chalk.cyan(`📂 Restored session: ${this.session.workingDir}\n`));
         }
