@@ -206,12 +206,9 @@ class ChatBot {
                 consecutiveReplaces = 0;
             }
             
-            console.log(chalk.cyan(`\n🔧 Executing ${toolCalls.length} tool(s)...\n`));
-            
             const results = [];
             for (const { tool, params } of toolCalls) {
                 lastTool = tool;
-                console.log(chalk.gray(`  → ${tool}(${JSON.stringify(params)})`));
                 try {
                     const result = await this.tools.execute(tool, params);
                     
@@ -222,7 +219,7 @@ class ChatBot {
                     
                     // Display execute output to user
                     if (tool === 'execute' && result && !result.startsWith('Error:')) {
-                        console.log(chalk.cyan('\n📤 Output:\n') + result);
+                        console.log(result);
                     }
                     
                     // Truncate long results for AI
@@ -234,7 +231,6 @@ class ChatBot {
             }
             
             const feedback = `[Tool Results]\n${results.join('\n')}\n\nIf task needs more steps, continue. Otherwise respond briefly to confirm.`;
-            console.log(chalk.cyan('\n📤 Sending results to AI...\n'));
             
             await this.messageHandler.send(feedback, false);
             
