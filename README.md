@@ -1,19 +1,15 @@
-# ChatGPT CLI
+# OpenRouter Agent CLI
 
-CLI tool for ChatGPT and Gemini without login required.
+AI Agent CLI powered by OpenRouter API - clean UI with code execution support.
 
 ## Features
 
-- ✅ No login required (optional login for higher rate limits)
-- ✅ Interactive chat mode
-- ✅ Stdin/stdout mode for piping
-- ✅ **AI Agent mode with tools** 🆕
-- ✅ **Session persistence with cookies** 🆕
-- ✅ Auto command execution with safety checks
-- ✅ Session persistence (working dir, env vars)
-- ✅ Syntax highlighting
-- ✅ Interactive commands (vim, ssh, etc)
-- ✅ Multi-model support (ChatGPT, Gemini)
+- 🤖 **Agent Mode** - AI uses tools to complete tasks
+- 📝 **File Operations** - Read, write, edit files with diff preview
+- 🔍 **Code Search** - Grep and find files
+- ⚡ **Code Execution** - Compile and run C/C++, Python, JavaScript, Rust, Go, Java
+- 💬 **Interactive Chat** - Clean conversational interface with spinner
+- 📦 **Session Management** - Persistent working directory
 
 ## Installation
 
@@ -21,66 +17,59 @@ CLI tool for ChatGPT and Gemini without login required.
 git clone https://github.com/tongteo/agent.git
 cd agent/nodejs
 npm install
+npm link
+```
+
+## Configuration
+
+Create `.env` file:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
 ```
 
 ## Usage
 
-### Interactive mode
 ```bash
-node chat.js              # ChatGPT
-node chat.js --gemini     # Gemini
-node chat.js --agent      # ChatGPT Agent Mode 🆕
-node chat.js --login      # Login mode (higher rate limits) 🆕
-node chat.js --agent --login  # Agent + Login
+# Agent mode
+openrouter-cli --agent
+
+# Change model during chat
+/model openai/gpt-oss-120b:free
+
+# Clear conversation
+clear
 ```
 
-### Agent Mode 🆕
-Agent mode gives AI access to tools for file operations and code search:
+## Available Tools
 
-```bash
-node chat.js --agent
-
-# Example commands:
-# "read the file package.json"
-# "list all JavaScript files"
-# "search for TODO in the code"
-# "write hello world to test.txt"
-```
-
-**Available Tools:**
 - `read_file` - Read file content
-- `write_file` - Write to file
+- `write_file` - Create new file
+- `str_replace` - Edit existing file (shows diff)
 - `list_dir` - List directory contents
-- `grep` - Search in files
-- `find_files` - Find files by pattern
+- `grep` - Search patterns in files
+- `find_files` - Find files by name
+- `execute` - Compile and run code files
 
-### Stdin mode
-```bash
-echo "What is 2+2?" | node stdin.js
-cat file.txt | node stdin.js --gemini
+## Examples
+
+```
+You: Create hello.cpp that prints "Hello World" and run it
+AI: [creates file, compiles, executes]
+
+You: Change "Hello" to "Hi" in hello.cpp
+AI: [shows diff, applies change]
 ```
 
-### Commands
-- `exit` - Quit
-- `clear` - New conversation
-- `logout` - Clear saved login session 🆕
-- `y` - Execute all commands
-- `n` - Skip commands
-- `select` - Choose specific command
+## Free Models
 
-### Auto-execute mode
-```bash
-AUTO_EXEC=true node chat.js
-```
+- `arcee-ai/trinity-large-preview:free` - Default
+- `openai/gpt-oss-120b:free` - Large model
+- `z-ai/glm-4.5-air:free` - Fast
+- `stepfun/step-3.5-flash:free` - Very fast
 
-## TODO
-
-- [ ] Add Claude support
-- [ ] Add unit tests
-- [ ] Add config file
-- [ ] Add plugin system
-- [ ] Add logging
-- [x] Add AI agent mode with tools
+More: https://openrouter.ai/models?order=newest&supported_parameters=tools
 
 ## License
 
