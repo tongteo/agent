@@ -32,8 +32,8 @@ class DiffFormatter {
 
     static renderDiff(diff, filePath) {
         const lines = [];
-        lines.push(chalk.bold.cyan(`\n╭─ ${filePath}`));
-        lines.push(chalk.cyan('│'));
+        lines.push(chalk.bold.magenta(`\n╭─ ${filePath}`));
+        lines.push(chalk.magenta('│'));
         
         const changes = diff.filter(d => d.type !== 'same');
         if (changes.length === 0) return '';
@@ -46,39 +46,39 @@ class DiffFormatter {
                     .some(d => d.type !== 'same');
                 
                 if (hasChangeNearby) {
-                    const lineNum = String(item.newLine || item.oldLine).padStart(4);
-                    lines.push(chalk.gray(`│ ${lineNum} │ ${item.content}`));
+                    const lineNum = chalk.dim(String(item.newLine || item.oldLine).padStart(4));
+                    lines.push(chalk.dim(`│ ${lineNum} │ ${item.content}`));
                 }
             } else if (item.type === 'delete') {
-                const lineNum = String(item.oldLine).padStart(4);
-                lines.push(chalk.red(`│ ${lineNum} │ - ${item.content}`));
+                const lineNum = chalk.red(String(item.oldLine).padStart(4));
+                lines.push(chalk.red(`│ ${lineNum} │ `) + chalk.bgRed.white(` - `) + chalk.red(` ${item.content}`));
             } else if (item.type === 'add') {
-                const lineNum = String(item.newLine).padStart(4);
-                lines.push(chalk.green(`│ ${lineNum} │ + ${item.content}`));
+                const lineNum = chalk.green(String(item.newLine).padStart(4));
+                lines.push(chalk.green(`│ ${lineNum} │ `) + chalk.bgGreen.black(` + `) + chalk.green(` ${item.content}`));
             }
         }
         
-        lines.push(chalk.cyan('╰─'));
+        lines.push(chalk.magenta('╰─'));
         return lines.join('\n');
     }
 
     static formatCreate(content, filePath) {
         const lines = content.split('\n');
         const output = [
-            chalk.bold.green(`\n╭─ ${filePath} (new file)`),
-            chalk.green('│')
+            chalk.bold.cyan(`\n╭─ ${filePath} `) + chalk.bgCyan.black(` NEW `),
+            chalk.cyan('│')
         ];
         
         lines.slice(0, 10).forEach((line, i) => {
-            const lineNum = String(i + 1).padStart(4);
-            output.push(chalk.green(`│ ${lineNum} │ + ${line}`));
+            const lineNum = chalk.cyan(String(i + 1).padStart(4));
+            output.push(chalk.cyan(`│ ${lineNum} │ `) + chalk.bgGreen.black(` + `) + chalk.green(` ${line}`));
         });
         
         if (lines.length > 10) {
-            output.push(chalk.gray(`│ ... ${lines.length - 10} more lines`));
+            output.push(chalk.dim(`│ ... ${lines.length - 10} more lines`));
         }
         
-        output.push(chalk.green('╰─'));
+        output.push(chalk.cyan('╰─'));
         return output.join('\n');
     }
 }
