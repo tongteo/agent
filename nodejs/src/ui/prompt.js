@@ -80,6 +80,22 @@ class PromptManager {
                     return;
                 }
                 
+                // Paste or multi-character input
+                if (key.length > 1) {
+                    // Filter out control characters except newlines
+                    const text = key.replace(/[\r\n]/g, '');
+                    currentInput += text;
+                    
+                    const match = this.completions.find(c => c.startsWith(currentInput) && c !== currentInput);
+                    ghostText = match ? match.slice(currentInput.length) : '';
+                    
+                    readline.clearLine(process.stdout, 0);
+                    readline.cursorTo(process.stdout, 0);
+                    process.stdout.write(prompt + currentInput + chalk.gray(ghostText));
+                    readline.cursorTo(process.stdout, prompt.length + currentInput.length);
+                    return;
+                }
+                
                 // Regular character
                 if (key.length === 1 && key >= ' ') {
                     currentInput += key;
