@@ -98,16 +98,16 @@ class DiffFormatter {
                 if (hasChangeNearby) {
                     const lineNum = c.dim(String(item.newLine || item.oldLine).padStart(4));
                     const highlighted = highlight(item.content, lang);
-                    lines.push(c.blue('│ ') + c.dim(`${lineNum} │   `) + c.dim(highlighted));
+                    lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.dim(`${lineNum} │   `) + c.dim(highlighted)));
                 }
             } else if (item.type === 'delete') {
                 const lineNum = c.dim(String(item.oldLine).padStart(4));
                 const highlighted = highlight(item.content, lang);
-                lines.push(c.blue('│ ') + c.red(`${lineNum} │ - `) + highlighted);
+                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.red(`${lineNum} │ - `) + highlighted));
             } else if (item.type === 'add') {
                 const lineNum = c.dim(String(item.newLine).padStart(4));
                 const highlighted = highlight(item.content, lang);
-                lines.push(c.blue('│ ') + c.green(`${lineNum} │ + `) + highlighted);
+                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.green(`${lineNum} │ + `) + highlighted));
             }
         }
         
@@ -126,7 +126,7 @@ class DiffFormatter {
         lines.slice(0, 10).forEach((line, i) => {
             const lineNum = c.dim(String(i + 1).padStart(4));
             const highlighted = highlight(line, lang);
-            output.push(c.blue('│ ') + c.green(`${lineNum} │ + `) + highlighted);
+            output.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.green(`${lineNum} │ + `) + highlighted));
         });
         
         if (lines.length > 10) {

@@ -238,21 +238,51 @@ class ChatBot {
             
             await this.messageHandler.send(feedback, false);
             
-            process.stdout.write('🤖 ');
-            let response = '';
+            // Stream response with spinner/tool detection
+            const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let i = 0;
+            let hasOutput = false;
+            let buffer = '';
+            let hasTool = false;
+            const interval = setInterval(() => {
+                if (!hasOutput) {
+                    process.stdout.write(`\r🤖 ${spinner[i]} Thinking...`);
+                    i = (i + 1) % spinner.length;
+                }
+            }, 80);
+            
             await this.messageHandler.stream((chunk) => {
-                response += chunk;
-                process.stdout.write(formatMath(chunk));
+                buffer += chunk;
+                
+                if (buffer.includes('<tool>') || buffer.includes('<params>')) {
+                    hasTool = true;
+                    return;
+                }
+                
+                if (/<\s*$|<tool|<param/.test(buffer)) {
+                    return;
+                }
+                
+                if (!hasOutput && !hasTool) {
+                    clearInterval(interval);
+                    process.stdout.write('\r\x1b[K🤖 ');
+                    hasOutput = true;
+                    process.stdout.write(formatMath(buffer));
+                    return;
+                }
+                
+                if (hasOutput) {
+                    process.stdout.write(formatMath(chunk));
+                }
             });
+            
+            clearInterval(interval);
+            if (!hasOutput) {
+                process.stdout.write('\r\x1b[K');
+            }
             console.log('\n');
             
             iteration++;
-            
-            // Stop if no more tool calls in response
-            const hasMoreTools = ToolParser.parse(response).length > 0;
-            if (!hasMoreTools) {
-                break;
-            }
         }
         
         if (iteration >= maxIterations) {
