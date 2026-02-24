@@ -123,6 +123,8 @@ class ChatBot {
 
     async handleToolCalls(maxIterations = 5) {
         let iteration = 0;
+        let consecutiveReplaces = 0;
+        let lastTool = null;
         
         while (iteration < maxIterations) {
             const lastResponse = await this.getLastResponse();
@@ -131,10 +133,21 @@ class ChatBot {
             const toolCalls = ToolParser.parse(lastResponse);
             if (toolCalls.length === 0) break;
             
+            // Detect multiple str_replace calls
+            if (toolCalls.length === 1 && toolCalls[0].tool === 'str_replace' && lastTool === 'str_replace') {
+                consecutiveReplaces++;
+                if (consecutiveReplaces >= 2) {
+                    console.log(chalk.yellow('\n⚠️  Multiple str_replace detected. Consider using write_file instead.\n'));
+                }
+            } else {
+                consecutiveReplaces = 0;
+            }
+            
             console.log(chalk.cyan(`\n🔧 Executing ${toolCalls.length} tool(s)...\n`));
             
             const results = [];
             for (const { tool, params } of toolCalls) {
+                lastTool = tool;
                 console.log(chalk.gray(`  → ${tool}(${JSON.stringify(params)})`));
                 try {
                     const result = await this.tools.execute(tool, params);
