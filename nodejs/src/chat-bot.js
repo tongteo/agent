@@ -138,6 +138,12 @@ class ChatBot {
                 console.log(chalk.gray(`  → ${tool}(${JSON.stringify(params)})`));
                 try {
                     const result = await this.tools.execute(tool, params);
+                    
+                    // Display diff output to user
+                    if (result && (result.includes('╭─') || result.includes('📝'))) {
+                        console.log(result);
+                    }
+                    
                     results.push(`[${tool}] ${result}`);
                 } catch (e) {
                     results.push(`[${tool}] Error: ${e.message}`);
