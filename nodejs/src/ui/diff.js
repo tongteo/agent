@@ -4,6 +4,11 @@ const hljs = require('highlight.js');
 // Force colors for diff output
 const c = new chalk.Instance({ level: 3 });
 
+// Strip ANSI codes to get visible length
+function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 // Detect language from file extension
 function detectLanguage(filePath) {
     const ext = filePath.split('.').pop();
@@ -82,6 +87,9 @@ class DiffFormatter {
     static renderDiff(diff, filePath) {
         const lang = detectLanguage(filePath);
         const lines = [];
+        const termWidth = process.stdout.columns || 120;
+        const contentWidth = termWidth - 3; // Subtract border chars
+        
         lines.push(c.bold.blue(`\n╭─ ${filePath}`));
         lines.push(c.blue('│'));
         
@@ -98,16 +106,25 @@ class DiffFormatter {
                 if (hasChangeNearby) {
                     const lineNum = c.dim(String(item.newLine || item.oldLine).padStart(4));
                     const highlighted = highlight(item.content, lang);
-                    lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.dim(`${lineNum} │   `) + c.dim(highlighted)));
+                    const text = c.dim(`${lineNum} │   `) + c.dim(highlighted);
+                    const visibleLen = stripAnsi(text).length;
+                    const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+                    lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(text + padding));
                 }
             } else if (item.type === 'delete') {
                 const lineNum = c.dim(String(item.oldLine).padStart(4));
                 const highlighted = highlight(item.content, lang);
-                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.red(`${lineNum} │ - `) + highlighted));
+                const text = c.red(`${lineNum} │ - `) + highlighted;
+                const visibleLen = stripAnsi(text).length;
+                const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(text + padding));
             } else if (item.type === 'add') {
                 const lineNum = c.dim(String(item.newLine).padStart(4));
                 const highlighted = highlight(item.content, lang);
-                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.green(`${lineNum} │ + `) + highlighted));
+                const text = c.green(`${lineNum} │ + `) + highlighted;
+                const visibleLen = stripAnsi(text).length;
+                const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+                lines.push(c.blue('│ ') + c.bgHex('#2a2a2a')(text + padding));
             }
         }
         
@@ -118,6 +135,9 @@ class DiffFormatter {
     static formatCreate(content, filePath) {
         const lang = detectLanguage(filePath);
         const lines = content.split('\n');
+        const termWidth = process.stdout.columns || 120;
+        const contentWidth = termWidth - 3;
+        
         const output = [
             c.bold.blue(`\n╭─ ${filePath} `) + c.bgGreen.black(` NEW `),
             c.blue('│')
@@ -126,7 +146,10 @@ class DiffFormatter {
         lines.slice(0, 10).forEach((line, i) => {
             const lineNum = c.dim(String(i + 1).padStart(4));
             const highlighted = highlight(line, lang);
-            output.push(c.blue('│ ') + c.bgHex('#2a2a2a')(c.green(`${lineNum} │ + `) + highlighted));
+            const text = c.green(`${lineNum} │ + `) + highlighted;
+            const visibleLen = stripAnsi(text).length;
+            const padding = ' '.repeat(Math.max(0, contentWidth - visibleLen));
+            output.push(c.blue('│ ') + c.bgHex('#2a2a2a')(text + padding));
         });
         
         if (lines.length > 10) {
