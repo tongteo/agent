@@ -397,6 +397,176 @@ class ToolRegistry {
                 return `Error: ${e.message}\n${e.stderr || ''}`;
             }
         }, 'Compile and execute code file. Params: {"file": "main.py", "args": "arg1 arg2"}');
+
+        // Advanced debugging tools
+        this.register('bash', async ({ command, working_dir }) => {
+            try {
+                const result = execSync(command, {
+                    encoding: 'utf-8',
+                    maxBuffer: 10 * 1024 * 1024,
+                    timeout: 30000,
+                    cwd: working_dir || process.cwd()
+                });
+                return result || '(no output)';
+            } catch (e) {
+                return `Error: ${e.message}\n${e.stderr || ''}`;
+            }
+        }, 'Execute bash command. Params: {"command": "ls -la", "working_dir": "/path"}');
+
+        this.register('tree', async ({ path: dirPath = '.', depth = 2, ignore = [] }) => {
+            try {
+                const ignorePatterns = ['node_modules', '.git', 'dist', 'build', ...ignore];
+                const ignoreArgs = ignorePatterns.map(p => `-I "${p}"`).join(' ');
+                const cmd = `tree -L ${depth} ${ignoreArgs} ${dirPath}`;
+                const result = execSync(cmd, { encoding: 'utf-8', timeout: 10000 });
+                return result;
+            } catch (e) {
+                // Fallback if tree not installed
+                return this.manualTree(dirPath, depth, ignorePatterns);
+            }
+        }, 'Show directory tree. Params: {"path": ".", "depth": 2, "ignore": ["tmp"]}');
+
+        this.register('git', async ({ action, message, branch }) => {
+            try {
+                let cmd;
+                if (action === 'status') {
+                    cmd = 'git status --short';
+                } else if (action === 'diff') {
+                    cmd = 'git diff';
+                } else if (action === 'log') {
+                    cmd = 'git log --oneline -10';
+                } else if (action === 'commit') {
+                    cmd = `git add -A && git commit -m "${message}"`;
+                } else if (action === 'push') {
+                    cmd = 'git push';
+                } else if (action === 'pull') {
+                    cmd = 'git pull';
+                } else if (action === 'branch') {
+                    cmd = branch ? `git checkout -b ${branch}` : 'git branch';
+                } else {
+                    return 'Error: Invalid action. Use: status, diff, log, commit, push, pull, branch';
+                }
+                
+                const result = execSync(cmd, { encoding: 'utf-8', timeout: 30000 });
+                return result || 'Success';
+            } catch (e) {
+                return `Error: ${e.message}\n${e.stderr || ''}`;
+            }
+        }, 'Git operations. Params: {"action": "status|diff|log|commit|push|pull|branch", "message": "...", "branch": "..."}');
+
+        this.register('analyze_code', async ({ path: filePath }) => {
+            try {
+                const content = fs.readFileSync(filePath, 'utf-8');
+                const lines = content.split('\n');
+                const ext = filePath.split('.').pop();
+                
+                // Basic analysis
+                const stats = {
+                    file: filePath,
+                    language: ext,
+                    total_lines: lines.length,
+                    code_lines: lines.filter(l => l.trim() && !l.trim().startsWith('//')).length,
+                    blank_lines: lines.filter(l => !l.trim()).length,
+                    comment_lines: lines.filter(l => l.trim().startsWith('//')).length
+                };
+                
+                // Find functions/classes
+                const functions = [];
+                const classes = [];
+                
+                lines.forEach((line, i) => {
+                    if (/function\s+(\w+)/.test(line)) {
+                        functions.push({ name: line.match(/function\s+(\w+)/)[1], line: i + 1 });
+                    }
+                    if (/class\s+(\w+)/.test(line)) {
+                        classes.push({ name: line.match(/class\s+(\w+)/)[1], line: i + 1 });
+                    }
+                    if (/def\s+(\w+)/.test(line)) {
+                        functions.push({ name: line.match(/def\s+(\w+)/)[1], line: i + 1 });
+                    }
+                });
+                
+                stats.functions = functions;
+                stats.classes = classes;
+                
+                return JSON.stringify(stats, null, 2);
+            } catch (e) {
+                return `Error: ${e.message}`;
+            }
+        }, 'Analyze code file. Params: {"path": "file.js"}');
+
+        this.register('package_install', async ({ manager = 'npm', packages }) => {
+            try {
+                let cmd;
+                if (manager === 'npm') {
+                    cmd = `npm install ${packages.join(' ')}`;
+                } else if (manager === 'pip') {
+                    cmd = `pip install ${packages.join(' ')}`;
+                } else if (manager === 'cargo') {
+                    cmd = `cargo add ${packages.join(' ')}`;
+                } else {
+                    return 'Error: Unsupported package manager. Use: npm, pip, cargo';
+                }
+                
+                const result = execSync(cmd, { encoding: 'utf-8', timeout: 120000 });
+                return result || 'Installed successfully';
+            } catch (e) {
+                return `Error: ${e.message}\n${e.stderr || ''}`;
+            }
+        }, 'Install packages. Params: {"manager": "npm|pip|cargo", "packages": ["express", "axios"]}');
+
+        this.register('debug_trace', async ({ file, line }) => {
+            try {
+                const content = fs.readFileSync(file, 'utf-8');
+                const lines = content.split('\n');
+                const targetLine = lines[line - 1];
+                
+                // Show context around the line
+                const start = Math.max(0, line - 5);
+                const end = Math.min(lines.length, line + 5);
+                const context = lines.slice(start, end).map((l, i) => {
+                    const lineNum = start + i + 1;
+                    const marker = lineNum === line ? '→' : ' ';
+                    return `${marker} ${lineNum}: ${l}`;
+                }).join('\n');
+                
+                return `Debug trace at ${file}:${line}\n\n${context}`;
+            } catch (e) {
+                return `Error: ${e.message}`;
+            }
+        }, 'Show debug trace with context. Params: {"file": "app.js", "line": 42}');
+    }
+
+    manualTree(dirPath, depth, ignore, currentDepth = 0, prefix = '') {
+        if (currentDepth >= depth) return '';
+        
+        try {
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            let result = '';
+            
+            entries.forEach((entry, i) => {
+                if (ignore.some(pattern => entry.name.includes(pattern))) return;
+                
+                const isLast = i === entries.length - 1;
+                const connector = isLast ? '└── ' : '├── ';
+                result += `${prefix}${connector}${entry.name}\n`;
+                
+                if (entry.isDirectory()) {
+                    const newPrefix = prefix + (isLast ? '    ' : '│   ');
+                    result += this.manualTree(
+                        path.join(dirPath, entry.name),
+                        depth,
+                        ignore,
+                        currentDepth + 1,
+                        newPrefix
+                    );
+                }
+            });
+            
+            return result;
+        } catch (e) {
+            return '';
+        }
     }
 
     setSubagentManager(manager) {

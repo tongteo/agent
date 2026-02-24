@@ -217,8 +217,9 @@ class ChatBot {
                         console.log('\n' + result);
                     }
                     
-                    // Display execute output to user
-                    if (tool === 'execute' && result && !result.startsWith('Error:')) {
+                    // Display output for certain tools
+                    const displayTools = ['execute', 'bash', 'tree', 'git', 'analyze_code', 'debug_trace'];
+                    if (displayTools.includes(tool) && result && !result.startsWith('Error:')) {
                         console.log(result);
                     }
                     
