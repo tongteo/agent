@@ -20,6 +20,21 @@ npm install
 npm link
 ```
 
+## Configuration
+
+Create a `.env` file in the project root:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add your OpenRouter API key:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
+```
+
 ## Usage
 
 ### Basic Chat
@@ -34,6 +49,11 @@ openrouter-cli --agent
 
 ### Environment Variables
 ```bash
+# Set in .env file (recommended)
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
+
+# Or export as environment variables
 export OPENROUTER_API_KEY=your-key
 export OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
 openrouter-cli --agent
