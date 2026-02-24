@@ -353,6 +353,50 @@ class ToolRegistry {
 
             return 'Error: Invalid command. Use "ListAgents" or "InvokeSubagents"';
         }, 'Delegate tasks to subagents. Params: {"command": "InvokeSubagents", "content": {"subagents": [{"query": "task", "agent_name": "default", "relevant_context": "..."}]}}');
+
+        // Execute tool
+        this.register('execute', async ({ file, args = '' }) => {
+            try {
+                const ext = file.split('.').pop();
+                let cmd;
+                
+                // Detect language and build command
+                if (ext === 'py') {
+                    cmd = `python3 ${file} ${args}`;
+                } else if (ext === 'js') {
+                    cmd = `node ${file} ${args}`;
+                } else if (ext === 'sh' || ext === 'bash') {
+                    cmd = `bash ${file} ${args}`;
+                } else if (ext === 'c') {
+                    const out = file.replace('.c', '');
+                    cmd = `gcc ${file} -o ${out} && ./${out} ${args}`;
+                } else if (ext === 'cpp' || ext === 'cc' || ext === 'cxx') {
+                    const out = file.replace(/\.(cpp|cc|cxx)$/, '');
+                    cmd = `g++ ${file} -o ${out} && ./${out} ${args}`;
+                } else if (ext === 'rs') {
+                    const out = file.replace('.rs', '');
+                    cmd = `rustc ${file} -o ${out} && ./${out} ${args}`;
+                } else if (ext === 'go') {
+                    cmd = `go run ${file} ${args}`;
+                } else if (ext === 'java') {
+                    const className = file.replace('.java', '');
+                    cmd = `javac ${file} && java ${className} ${args}`;
+                } else {
+                    return `Error: Unsupported file type: ${ext}`;
+                }
+                
+                const result = execSync(cmd, {
+                    encoding: 'utf-8',
+                    maxBuffer: 10 * 1024 * 1024,
+                    timeout: 30000,
+                    cwd: process.cwd()
+                });
+                
+                return result || '(no output)';
+            } catch (e) {
+                return `Error: ${e.message}\n${e.stderr || ''}`;
+            }
+        }, 'Compile and execute code file. Params: {"file": "main.py", "args": "arg1 arg2"}');
     }
 
     setSubagentManager(manager) {

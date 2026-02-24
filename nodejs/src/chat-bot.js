@@ -178,6 +178,11 @@ class ChatBot {
                         console.log('\n' + result);
                     }
                     
+                    // Display execute output to user
+                    if (tool === 'execute' && result && !result.startsWith('Error:')) {
+                        console.log(chalk.cyan('\n📤 Output:\n') + result);
+                    }
+                    
                     // Truncate long results for AI
                     const truncated = result.length > 500 ? result.substring(0, 500) + '...(truncated)' : result;
                     results.push(`[${tool}] Success`);
