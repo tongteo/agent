@@ -1,17 +1,15 @@
 # OpenRouter Agent CLI
 
-AI Agent CLI powered by OpenRouter API with LSP support for code intelligence.
+AI Agent CLI powered by OpenRouter API - clean UI with code execution support.
 
 ## Features
 
-- 🤖 **Agent Mode** - AI can use tools to complete tasks
-- 🔀 **Subagent System** - Delegate tasks to parallel agents with isolated context
-- 📝 **File Operations** - Read, write, list files
+- 🤖 **Agent Mode** - AI uses tools to complete tasks
+- 📝 **File Operations** - Read, write, edit files with diff preview
 - 🔍 **Code Search** - Grep and find files
-- 🧠 **LSP Integration** - Go to definition, find references, get symbols
-- 💬 **Interactive Chat** - Conversational interface
-- ⚡ **Command Execution** - Auto-detect and execute shell commands
-- 📦 **Session Management** - Persistent working directory and env vars
+- ⚡ **Code Execution** - Compile and run C/C++, Python, JavaScript, Rust, Go, Java
+- 💬 **Interactive Chat** - Clean conversational interface with spinner
+- 📦 **Session Management** - Persistent working directory
 
 ## Installation
 
@@ -22,172 +20,54 @@ npm link
 
 ## Configuration
 
-Create a `.env` file in the project root:
+Create `.env` file:
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` and add your OpenRouter API key:
-
-```
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
 ```
 
 ## Usage
 
-### Basic Chat
 ```bash
-openrouter-cli
-```
-
-### Agent Mode (with tools)
-```bash
+# Agent mode
 openrouter-cli --agent
-```
 
-### Change Model During Chat
-```bash
-# Show current model
-/model
-
-# Switch to different model (use Tab for autocomplete)
+# Change model during chat
 /model openai/gpt-oss-120b:free
-/model z-ai/glm-4.5-air:free
-/model stepfun/step-3.5-flash:free
+
+# Clear conversation
+clear
 ```
-
-**Tip:** Press `Tab` to autocomplete commands and model names!
-
-### Environment Variables
-```bash
-# Set in .env file (recommended)
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
-
-# Or export as environment variables
-export OPENROUTER_API_KEY=your-key
-export OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
-openrouter-cli --agent
-```
-
-### Popular Free Models
-- `arcee-ai/trinity-large-preview:free` - Default, good balance
-- `openai/gpt-oss-120b:free` - Large model, slower but powerful
-- `z-ai/glm-4.5-air:free` - Fast and efficient
-- `stepfun/step-3.5-flash:free` - Very fast responses
-
-See more at: https://openrouter.ai/models?order=newest&supported_parameters=tools
 
 ## Available Tools
 
-### File Operations
 - `read_file` - Read file content
-- `write_file` - Write to file
+- `write_file` - Create new file
+- `str_replace` - Edit existing file (shows diff)
 - `list_dir` - List directory contents
-
-### Search
-- `grep` - Search for patterns in files
-- `find_files` - Find files by name pattern
-
-### LSP (Code Intelligence)
-- `goto_definition` - Jump to symbol definition
-- `find_references` - Find all references to a symbol
-- `get_symbols` - Get all symbols in a document
-
-### Subagent System
-- `use_subagent` - Delegate tasks to specialized agents
-  - `ListAgents` - List available agents
-  - `InvokeSubagents` - Run multiple agents in parallel
-
-## Subagent System
-
-The subagent system allows you to delegate complex tasks to specialized agents that run in parallel with isolated context.
-
-### Example: Parallel Task Execution
-
-```javascript
-<tool>use_subagent</tool>
-<params>{
-    "command": "InvokeSubagents",
-    "content": {
-        "subagents": [
-            {
-                "query": "Analyze all JavaScript files in src/",
-                "agent_name": "default",
-                "relevant_context": "Focus on code quality"
-            },
-            {
-                "query": "Count total lines of code",
-                "agent_name": "default"
-            }
-        ]
-    }
-}</params>
-```
-
-### Benefits
-- **Parallel Execution** - Multiple tasks run simultaneously
-- **Context Isolation** - Each subagent has its own conversation context
-- **Task Decomposition** - Break complex problems into smaller subtasks
-
-See `examples/subagent-demo.js` for a complete example.
-
-## LSP Support
-
-Supported languages:
-- JavaScript/TypeScript (requires `typescript-language-server`)
-- Python (requires `pylsp`)
-- Rust (requires `rust-analyzer`)
-
-Install language servers:
-```bash
-npm install -g typescript-language-server
-pip install python-lsp-server
-# rust-analyzer usually comes with rustup
-```
+- `grep` - Search patterns in files
+- `find_files` - Find files by name
+- `execute` - Compile and run code files
 
 ## Examples
 
-### Create a file
 ```
-You: write a hello world program in Python
-AI: <tool>write_file</tool>
-    <params>{"path": "hello.py", "content": "print('Hello World')"}</params>
+You: Create hello.cpp that prints "Hello World" and run it
+AI: [creates file, compiles, executes]
+
+You: Change "Hello" to "Hi" in hello.cpp
+AI: [shows diff, applies change]
 ```
 
-### Find symbol definition
-```
-You: find the definition of function myFunc in src/index.js at line 10, column 5
-AI: <tool>goto_definition</tool>
-    <params>{"file": "src/index.js", "line": 10, "character": 5}</params>
-```
+## Free Models
 
-### Delegate to subagents
-```
-You: analyze the codebase structure and count files in parallel
-AI: <tool>use_subagent</tool>
-    <params>{"command": "InvokeSubagents", "content": {"subagents": [...]}}</params>
-```
+- `arcee-ai/trinity-large-preview:free` - Default
+- `openai/gpt-oss-120b:free` - Large model
+- `z-ai/glm-4.5-air:free` - Fast
+- `stepfun/step-3.5-flash:free` - Very fast
 
-## Architecture
-
-```
-src/
-├── chat-bot.js          # Main chat bot logic
-├── commands/            # Command parsing and execution
-├── core/
-│   ├── agent.js         # Agent prompt and tool parser
-│   ├── lsp.js           # LSP client
-│   ├── message.js       # Message handling
-│   ├── session.js       # Session management
-│   ├── subagent.js      # Subagent system
-│   └── tools.js         # Tool registry
-├── models/
-│   └── openrouter.js    # OpenRouter API adapter
-└── ui/                  # UI formatting and prompts
-```
+More: https://openrouter.ai/models?order=newest&supported_parameters=tools
 
 ## License
 
