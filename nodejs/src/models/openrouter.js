@@ -14,22 +14,47 @@ class OpenRouterAdapter {
     async *streamMessage() {
         const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
             model: this.model,
-            messages: this.messages
+            messages: this.messages,
+            stream: true
         }, {
             headers: {
                 'Authorization': `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            responseType: 'stream'
         });
 
-        const content = response.data.choices[0].message.content;
-        this.messages.push({ role: 'assistant', content });
+        let fullContent = '';
+        let buffer = '';
         
-        // Yield content in chunks for visual effect
-        const chunkSize = 50;
-        for (let i = 0; i < content.length; i += chunkSize) {
-            yield content.slice(i, i + chunkSize);
+        for await (const chunk of response.data) {
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6).trim();
+                    
+                    if (data === '[DONE]') continue;
+                    if (!data) continue;
+                    
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content;
+                        
+                        if (content) {
+                            fullContent += content;
+                            yield content;
+                        }
+                    } catch (e) {
+                        // Skip invalid JSON
+                    }
+                }
+            }
         }
+        
+        this.messages.push({ role: 'assistant', content: fullContent });
     }
 
     reset() {
