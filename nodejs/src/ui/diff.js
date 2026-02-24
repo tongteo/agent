@@ -28,12 +28,18 @@ function highlight(code, lang) {
     try {
         if (lang === 'plaintext') return code;
         const result = hljs.highlight(code, { language: lang, ignoreIllegals: true });
-        return result.value
+        
+        // Decode HTML entities
+        let highlighted = result.value
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
             .replace(/&#x27;/g, "'")
-            .replace(/&amp;/g, '&')
+            .replace(/&amp;/g, '&');
+        
+        // Apply colors - order matters, do specific classes first
+        highlighted = highlighted
+            .replace(/<span class="hljs-meta-string">(.*?)<\/span>/g, c.hex('#9ece6a')('$1'))  // green
             .replace(/<span class="hljs-keyword">(.*?)<\/span>/g, c.hex('#bb9af7')('$1'))      // purple
             .replace(/<span class="hljs-string">(.*?)<\/span>/g, c.hex('#9ece6a')('$1'))       // green
             .replace(/<span class="hljs-number">(.*?)<\/span>/g, c.hex('#ff9e64')('$1'))       // orange
@@ -48,7 +54,10 @@ function highlight(code, lang) {
             .replace(/<span class="hljs-meta">(.*?)<\/span>/g, c.hex('#565f89')('$1'))        // dark gray
             .replace(/<span class="hljs-name">(.*?)<\/span>/g, c.hex('#7aa2f7')('$1'))        // blue
             .replace(/<span class="hljs-tag">(.*?)<\/span>/g, c.hex('#f7768e')('$1'))         // red
-            .replace(/<span[^>]*>(.*?)<\/span>/g, '$1');
+            .replace(/<span[^>]*>/g, '')  // Remove remaining opening tags
+            .replace(/<\/span>/g, '');     // Remove all closing tags
+        
+        return highlighted;
     } catch (e) {
         return code;
     }
