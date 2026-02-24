@@ -1,22 +1,26 @@
 {
-  "name": "chatgpt-cli",
+  "name": "openrouter-agent-cli",
   "version": "1.0.0",
-  "description": "Modern CLI for ChatGPT without login",
-  "main": "chat.js",
+  "description": "AI Agent CLI with OpenRouter API and LSP support",
+  "main": "bin/openrouter",
   "bin": {
-    "chatgpt-cli": "./bin/chatgpt",
-    "gemini-cli": "./bin/gemini",
-    "chatgpt-stdin": "./bin/chatgpt-stdin",
-    "gemini-stdin": "./bin/gemini-stdin"
+    "openrouter-cli": "./bin/openrouter"
   },
   "scripts": {
-    "start": "node chat.js"
+    "start": "node bin/openrouter",
+    "test": "mocha test/**/*.test.js --timeout 5000",
+    "test:watch": "mocha test/**/*.test.js --watch"
   },
   "dependencies": {
+    "axios": "^1.6.0",
     "chalk": "^4.1.2",
-    "ora": "^5.4.1",
-    "playwright": "^1.58.2",
+    "cli-highlight": "^2.1.11",
     "node-pty": "^1.0.0",
-    "cli-highlight": "^2.1.11"
+    "vscode-jsonrpc": "^8.2.0",
+    "vscode-languageserver-protocol": "^3.17.5"
+  },
+  "devDependencies": {
+    "chai": "^6.2.2",
+    "mocha": "^11.7.5"
   }
 }

@@ -4,7 +4,6 @@ class MessageHandler {
     constructor(model, session, agentPrompt = null) {
         this.model = model;
         this.session = session;
-        this.messageCount = 0;
         this.agentPrompt = agentPrompt;
     }
 
@@ -19,75 +18,38 @@ ${this.agentPrompt}`;
     }
 
     async send(message, includeContext = true) {
-        const fullMessage = includeContext ? `${this.getSystemContext()}\n\n${message}` : message;
-        await this.model.sendMessage(fullMessage);
+        const systemPrompt = includeContext ? this.getSystemContext() : null;
+        
+        if (systemPrompt && this.model.messages.length === 0) {
+            this.model.messages.push({ role: 'system', content: systemPrompt });
+        }
+        
+        this.model.messages.push({ role: 'user', content: message });
     }
 
     async stream(onChunk) {
-        const messages = await this.model.waitForResponse(this.messageCount);
-        if (!messages || messages.length <= this.messageCount) {
-            return null;
-        }
+        // Stream from OpenRouter API
+        let fullContent = '';
         
-        const lastMessage = messages[messages.length - 1];
-        let lastText = '';
-        
-        for (let i = 0; i < 150; i++) {
-            const currentText = await lastMessage.innerText();
-            
-            if (currentText && currentText !== lastText) {
-                const newChars = currentText.slice(lastText.length);
-                if (onChunk) onChunk(newChars);
-                lastText = currentText;
+        try {
+            for await (const chunk of this.model.streamMessage()) {
+                fullContent += chunk;
+                if (onChunk) onChunk(chunk);
             }
-            
-            if (!(await this.model.isStreaming())) {
-                await this.model.page.waitForTimeout(500);
-                const finalText = await lastMessage.innerText();
-                if (finalText && finalText !== lastText) {
-                    const newChars = finalText.slice(lastText.length);
-                    if (onChunk) onChunk(newChars);
-                    lastText = finalText;
-                }
-                break;
+        } catch (error) {
+            // Fallback to non-streaming
+            const messages = this.model.messages.filter(m => m.role === 'assistant');
+            if (messages.length > 0) {
+                fullContent = messages[messages.length - 1].content;
+                if (onChunk) onChunk(fullContent);
             }
-            
-            await this.model.page.waitForTimeout(200);
         }
         
-        this.messageCount = messages.length;
-        return lastText;
-    }
-
-    async getLastResponse() {
-        const messages = await this.model.waitForResponse(this.messageCount);
-        if (!messages || messages.length <= this.messageCount) {
-            return null;
-        }
-        
-        const lastMessage = messages[messages.length - 1];
-        let lastText = '';
-        
-        for (let i = 0; i < 150; i++) {
-            const currentText = await lastMessage.innerText();
-            if (currentText) lastText = currentText;
-            
-            if (!(await this.model.isStreaming())) {
-                await this.model.page.waitForTimeout(500);
-                const finalText = await lastMessage.innerText();
-                if (finalText) lastText = finalText;
-                break;
-            }
-            
-            await this.model.page.waitForTimeout(200);
-        }
-        
-        this.messageCount = messages.length;
-        return lastText;
+        return fullContent;
     }
 
     reset() {
-        this.messageCount = 0;
+        this.model.reset();
     }
 }
 

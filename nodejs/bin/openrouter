@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+const { ChatBot } = require('../src/chat-bot');
+
+const apiKey = process.env.OPENROUTER_API_KEY || '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';
+const model = process.env.OPENROUTER_MODEL || 'arcee-ai/trinity-large-preview:free';
+const agentMode = process.argv.includes('--agent');
+
+const bot = new ChatBot(apiKey, model, agentMode);
+bot.init().then(() => bot.chat());

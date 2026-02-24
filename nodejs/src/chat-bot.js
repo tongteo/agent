@@ -1,9 +1,7 @@
 const chalk = require('chalk');
-const { BrowserManager } = require('./core/browser');
 const { SessionManager } = require('./core/session');
 const { MessageHandler } = require('./core/message');
-const { ChatGPTAdapter } = require('./models/chatgpt');
-const { GeminiAdapter } = require('./models/gemini');
+const { OpenRouterAdapter } = require('./models/openrouter');
 const { CommandExecutor } = require('./commands/executor');
 const { extractCommands } = require('./commands/parser');
 const { isDangerous, isInteractive, confirmDangerous } = require('./commands/validator');
@@ -11,70 +9,47 @@ const { formatOutput, formatMath } = require('./ui/formatter');
 const { PromptManager } = require('./ui/prompt');
 const { ToolRegistry } = require('./core/tools');
 const { AgentPrompt, ToolParser } = require('./core/agent');
-const { AuthManager } = require('./core/auth');
+const { SubagentManager } = require('./core/subagent');
 
 class ChatBot {
-    constructor(modelType = 'chatgpt', agentMode = false, loginMode = false) {
-        this.modelType = modelType;
+    constructor(apiKey, model = 'arcee-ai/trinity-large-preview:free', agentMode = false) {
+        this.apiKey = apiKey;
+        this.modelName = model;
         this.agentMode = agentMode;
-        this.loginMode = loginMode;
-        this.browser = new BrowserManager(!loginMode); // headless=false if login
         this.session = new SessionManager();
         this.prompt = new PromptManager();
-        this.auth = new AuthManager(modelType);
         this.model = null;
         this.messageHandler = null;
         this.executor = null;
         this.tools = agentMode ? new ToolRegistry() : null;
+        this.subagentManager = agentMode ? new SubagentManager(apiKey, model, process.cwd()) : null;
     }
 
     async init() {
-        const modelName = this.modelType === 'gemini' ? 'Gemini' : 'ChatGPT';
         const mode = this.agentMode ? ' (Agent Mode)' : '';
-        const login = this.loginMode ? ' [Login]' : '';
-        console.log(`🚀 Starting ${modelName}${mode}${login}...\n`);
+        console.log(`🚀 Starting OpenRouter${mode}...\n`);
         
         this.session.load();
         
-        const page = await this.browser.launch();
-        
-        // Load saved cookies if available
-        if (this.auth.hasSavedCookies()) {
-            console.log('📦 Loading saved session...');
-            await this.auth.loadCookies(this.browser.context);
-        }
-        
-        this.model = this.modelType === 'gemini' ? new GeminiAdapter(page) : new ChatGPTAdapter(page);
+        this.model = new OpenRouterAdapter(this.apiKey, this.modelName);
         await this.model.init();
-        
-        // Check if logged in
-        const loggedIn = await this.auth.isLoggedIn(page, this.modelType);
-        
-        if (this.loginMode && !loggedIn) {
-            // Wait for user to login
-            const success = await this.auth.waitForLogin(page, this.modelType);
-            if (success) {
-                await this.auth.saveCookies(this.browser.context);
-            }
-        } else if (loggedIn) {
-            console.log(chalk.green('✓ Logged in\n'));
-            // Save/update cookies
-            await this.auth.saveCookies(this.browser.context);
-        }
         
         const agentPrompt = this.agentMode ? AgentPrompt.getSystemPrompt(this.tools) : null;
         this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt);
         this.executor = new CommandExecutor(this.session);
         
-        console.log(`✓ Ready! Using ${modelName}${mode}. Type 'exit' to quit, 'clear' to start new conversation\n`);
+        if (this.agentMode && this.subagentManager) {
+            this.tools.setSubagentManager(this.subagentManager);
+        }
+        
+        console.log(`✓ Ready! Using ${this.modelName}${mode}. Type 'exit' to quit, 'clear' to start new conversation\n`);
         if (this.session.workingDir !== process.cwd()) {
             console.log(chalk.cyan(`📂 Restored session: ${this.session.workingDir}\n`));
         }
     }
 
     async clearChat() {
-        await this.model.page.reload({ waitUntil: 'networkidle' });
-        await this.model.page.waitForTimeout(2000);
+        this.model.reset();
         this.messageHandler.reset();
         this.session.reset();
         console.log("\n🔄 New conversation started (working directory and env vars reset)\n");
@@ -90,18 +65,11 @@ class ChatBot {
             if (msg.toLowerCase() === 'exit') {
                 console.log("\n👋 Goodbye!");
                 this.prompt.close();
-                await this.browser.close();
                 process.exit(0);
             }
 
             if (msg.toLowerCase() === 'clear') {
                 await this.clearChat();
-                continue;
-            }
-
-            if (msg.toLowerCase() === 'logout') {
-                this.auth.clearCookies();
-                console.log("\n🔓 Logged out. Restart to login again.\n");
                 continue;
             }
 
@@ -153,39 +121,52 @@ class ChatBot {
         }
     }
 
-    async handleToolCalls() {
-        const lastResponse = await this.getLastResponse();
-        if (!lastResponse) return;
+    async handleToolCalls(maxIterations = 10) {
+        let iteration = 0;
         
-        const toolCalls = ToolParser.parse(lastResponse);
-        if (toolCalls.length === 0) return;
-        
-        console.log(chalk.cyan(`\n🔧 Executing ${toolCalls.length} tool(s)...\n`));
-        
-        const results = [];
-        for (const { tool, params } of toolCalls) {
-            console.log(chalk.gray(`  → ${tool}(${JSON.stringify(params)})`));
-            try {
-                const result = await this.tools.execute(tool, params);
-                results.push(`[${tool}] ${result}`);
-            } catch (e) {
-                results.push(`[${tool}] Error: ${e.message}`);
+        while (iteration < maxIterations) {
+            const lastResponse = await this.getLastResponse();
+            if (!lastResponse) break;
+            
+            const toolCalls = ToolParser.parse(lastResponse);
+            if (toolCalls.length === 0) break;
+            
+            console.log(chalk.cyan(`\n🔧 Executing ${toolCalls.length} tool(s)...\n`));
+            
+            const results = [];
+            for (const { tool, params } of toolCalls) {
+                console.log(chalk.gray(`  → ${tool}(${JSON.stringify(params)})`));
+                try {
+                    const result = await this.tools.execute(tool, params);
+                    results.push(`[${tool}] ${result}`);
+                } catch (e) {
+                    results.push(`[${tool}] Error: ${e.message}`);
+                }
+            }
+            
+            const feedback = `[Tool Results]\n${results.join('\n\n')}\n\n[Note: If task is complete, respond with "DONE" without using any tools]`;
+            console.log(chalk.cyan('\n📤 Sending results to AI...\n'));
+            
+            await this.messageHandler.send(feedback, false);
+            
+            process.stdout.write('🤖 ');
+            await this.messageHandler.stream((chunk) => {
+                process.stdout.write(formatMath(chunk));
+            });
+            console.log('\n');
+            
+            iteration++;
+            
+            // Check if AI says it's done
+            const response = await this.getLastResponse();
+            if (response && (response.includes('DONE') || response.includes('completed') || response.includes('finished'))) {
+                break;
             }
         }
         
-        const feedback = `[Tool Results]\n${results.join('\n\n')}`;
-        console.log(chalk.cyan('\n📤 Sending results to AI...\n'));
-        
-        await this.messageHandler.send(feedback, false);
-        
-        process.stdout.write('🤖 ');
-        await this.messageHandler.stream((chunk) => {
-            process.stdout.write(formatMath(chunk));
-        });
-        console.log('\n');
-        
-        // Recursively handle more tool calls
-        await this.handleToolCalls();
+        if (iteration >= maxIterations) {
+            console.log(chalk.yellow(`\n⚠️  Reached maximum iterations (${maxIterations})\n`));
+        }
     }
 
     async handleCommands() {
@@ -304,9 +285,18 @@ class ChatBot {
     }
 
     async getLastResponse() {
-        const messages = await this.model.page.$$(this.model.getResponseSelector());
+        const messages = this.model.messages.filter(m => m.role === 'assistant');
         if (messages.length === 0) return null;
-        return await messages[messages.length - 1].innerText();
+        return messages[messages.length - 1].content;
+    }
+
+    cleanup() {
+        if (this.subagentManager) {
+            this.subagentManager.cleanup();
+        }
+        if (this.tools) {
+            this.tools.cleanup();
+        }
     }
 }
 
