@@ -118,22 +118,3 @@ class PromptManager {
 }
 
 module.exports = { PromptManager };
-                    readline.clearLine(process.stdout, 0);
-                    readline.cursorTo(process.stdout, 0);
-                    process.stdout.write(prompt + currentInput + chalk.gray(ghostText));
-                    readline.cursorTo(process.stdout, prompt.length + currentInput.length);
-                }
-            };
-            
-            stdin.on('data', onData);
-        });
-    }
-
-    close() {
-        if (this.rl) {
-            this.rl.close();
-        }
-    }
-}
-
-module.exports = { PromptManager };
