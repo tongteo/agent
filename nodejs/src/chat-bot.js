@@ -42,7 +42,8 @@ class ChatBot {
             this.tools.setSubagentManager(this.subagentManager);
         }
         
-        console.log(`✓ Ready! Using ${this.modelName}${mode}. Type 'exit' to quit, 'clear' to start new conversation\n`);
+        console.log(`✓ Ready! Using ${chalk.bold(this.modelName)}${mode}`);
+        console.log(chalk.gray(`  Commands: 'exit' to quit | 'clear' to reset | '/model <name>' to change model\n`));
         if (this.session.workingDir !== process.cwd()) {
             console.log(chalk.cyan(`📂 Restored session: ${this.session.workingDir}\n`));
         }
@@ -70,6 +71,17 @@ class ChatBot {
 
             if (msg.toLowerCase() === 'clear') {
                 await this.clearChat();
+                continue;
+            }
+
+            if (msg.startsWith('/model')) {
+                const newModel = msg.split(' ')[1];
+                if (newModel) {
+                    this.messageHandler.model.model = newModel;
+                    console.log(chalk.green(`✓ Model changed to: ${newModel}\n`));
+                } else {
+                    console.log(chalk.cyan(`Current model: ${this.messageHandler.model.model}\n`));
+                }
                 continue;
             }
 

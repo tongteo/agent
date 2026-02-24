@@ -47,6 +47,17 @@ openrouter-cli
 openrouter-cli --agent
 ```
 
+### Change Model During Chat
+```bash
+# Show current model
+/model
+
+# Switch to different model
+/model openai/gpt-oss-120b:free
+/model z-ai/glm-4.5-air:free
+/model stepfun/step-3.5-flash:free
+```
+
 ### Environment Variables
 ```bash
 # Set in .env file (recommended)
@@ -58,6 +69,14 @@ export OPENROUTER_API_KEY=your-key
 export OPENROUTER_MODEL=arcee-ai/trinity-large-preview:free
 openrouter-cli --agent
 ```
+
+### Popular Free Models
+- `arcee-ai/trinity-large-preview:free` - Default, good balance
+- `openai/gpt-oss-120b:free` - Large model, slower but powerful
+- `z-ai/glm-4.5-air:free` - Fast and efficient
+- `stepfun/step-3.5-flash:free` - Very fast responses
+
+See more at: https://openrouter.ai/models?order=newest&supported_parameters=tools
 
 ## Available Tools
 
