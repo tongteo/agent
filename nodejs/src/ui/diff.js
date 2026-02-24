@@ -54,10 +54,10 @@ class DiffFormatter {
                 }
             } else if (item.type === 'delete') {
                 const lineNum = c.dim(String(item.oldLine).padStart(4));
-                lines.push(c.blue('│ ') + c.bgRed.black(` ${lineNum} │ - ${item.content} `));
+                lines.push(c.blue('│ ') + c.red(`${lineNum} │ - ${item.content}`));
             } else if (item.type === 'add') {
                 const lineNum = c.dim(String(item.newLine).padStart(4));
-                lines.push(c.blue('│ ') + c.bgGreen.black(` ${lineNum} │ + ${item.content} `));
+                lines.push(c.blue('│ ') + c.green(`${lineNum} │ + ${item.content}`));
             }
         }
         
@@ -74,7 +74,7 @@ class DiffFormatter {
         
         lines.slice(0, 10).forEach((line, i) => {
             const lineNum = c.dim(String(i + 1).padStart(4));
-            output.push(c.blue('│ ') + c.bgGreen.black(` ${lineNum} │ + ${line} `));
+            output.push(c.blue('│ ') + c.green(`${lineNum} │ + ${line}`));
         });
         
         if (lines.length > 10) {
