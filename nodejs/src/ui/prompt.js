@@ -3,7 +3,6 @@ const chalk = require('chalk');
 
 class PromptManager {
     constructor() {
-        this.rl = null;
         this.completions = [
             '/model',
             '/model openai/gpt-oss-120b:free',
@@ -16,22 +15,11 @@ class PromptManager {
     }
 
     init() {
-        this.rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-            completer: (line) => {
-                const hits = this.completions.filter(c => c.startsWith(line));
-                return [hits.length ? hits : this.completions, line];
-            }
-        });
+        // No-op, kept for compatibility
     }
 
     async ask(prompt) {
         return new Promise((resolve) => {
-            if (!this.rl || this.rl.closed) {
-                this.init();
-            }
-            
             let currentInput = '';
             let ghostText = '';
             
@@ -44,7 +32,7 @@ class PromptManager {
             stdin.setEncoding('utf8');
             
             const cleanup = () => {
-                stdin.setRawMode(wasRaw || false);
+                stdin.setRawMode(false);
                 stdin.removeListener('data', onData);
             };
             
@@ -111,9 +99,7 @@ class PromptManager {
     }
 
     close() {
-        if (this.rl) {
-            this.rl.close();
-        }
+        // No-op, kept for compatibility
     }
 }
 

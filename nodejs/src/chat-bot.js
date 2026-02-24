@@ -61,6 +61,11 @@ class ChatBot {
         this.prompt.init();
 
         while (true) {
+            // Ensure stdin is in normal mode before asking
+            if (process.stdin.setRawMode) {
+                process.stdin.setRawMode(false);
+            }
+            
             const input = await this.prompt.ask('👤 You: ');
             const msg = input.trim();
 
