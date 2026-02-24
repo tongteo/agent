@@ -42,12 +42,15 @@ class ChatBot {
             this.tools.setSubagentManager(this.subagentManager);
         }
         
+        // Change to session working directory
+        if (this.session.workingDir && this.session.workingDir !== process.cwd()) {
+            process.chdir(this.session.workingDir);
+            console.log(chalk.cyan(`📂 Restored session: ${this.session.workingDir}\n`));
+        }
+        
         console.log(`✓ Ready! Using ${chalk.bold(this.modelName)}${mode}`);
         console.log(chalk.gray(`  Commands: 'exit' to quit | 'clear' to reset | '/model <name>' to change model`));
         console.log(chalk.gray(`  Tip: Press Tab for autocomplete\n`));
-        if (this.session.workingDir !== process.cwd()) {
-            console.log(chalk.cyan(`📂 Restored session: ${this.session.workingDir}\n`));
-        }
     }
 
     async clearChat() {
@@ -170,12 +173,12 @@ class ChatBot {
                 try {
                     const result = await this.tools.execute(tool, params);
                     
-                    // Display diff output to user
-                    if (result && (result.includes('╭─') || result.includes('📝'))) {
-                        console.log(result);
+                    // Display diff/create output to user
+                    if (result && result.includes('╭─')) {
+                        console.log('\n' + result);
                     }
                     
-                    // Truncate long results
+                    // Truncate long results for AI
                     const truncated = result.length > 500 ? result.substring(0, 500) + '...(truncated)' : result;
                     results.push(`[${tool}] Success`);
                 } catch (e) {

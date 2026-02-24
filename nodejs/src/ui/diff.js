@@ -1,5 +1,8 @@
 const chalk = require('chalk');
 
+// Force colors for diff output
+const c = new chalk.Instance({ level: 3 });
+
 class DiffFormatter {
     static formatDiff(oldContent, newContent, filePath) {
         const oldLines = oldContent ? oldContent.split('\n') : [];
@@ -32,8 +35,8 @@ class DiffFormatter {
 
     static renderDiff(diff, filePath) {
         const lines = [];
-        lines.push(chalk.bold.magenta(`\n╭─ ${filePath}`));
-        lines.push(chalk.magenta('│'));
+        lines.push(c.bold.blue(`\n╭─ ${filePath}`));
+        lines.push(c.blue('│'));
         
         const changes = diff.filter(d => d.type !== 'same');
         if (changes.length === 0) return '';
@@ -46,39 +49,39 @@ class DiffFormatter {
                     .some(d => d.type !== 'same');
                 
                 if (hasChangeNearby) {
-                    const lineNum = chalk.dim(String(item.newLine || item.oldLine).padStart(4));
-                    lines.push(chalk.dim(`│ ${lineNum} │ ${item.content}`));
+                    const lineNum = c.dim(String(item.newLine || item.oldLine).padStart(4));
+                    lines.push(c.blue('│ ') + c.dim(`${lineNum} │   ${item.content}`));
                 }
             } else if (item.type === 'delete') {
-                const lineNum = chalk.red(String(item.oldLine).padStart(4));
-                lines.push(chalk.red(`│ ${lineNum} │ `) + chalk.bgRed.white(` - `) + chalk.red(` ${item.content}`));
+                const lineNum = c.dim(String(item.oldLine).padStart(4));
+                lines.push(c.blue('│ ') + c.bgRed.black(` ${lineNum} │ - ${item.content} `));
             } else if (item.type === 'add') {
-                const lineNum = chalk.green(String(item.newLine).padStart(4));
-                lines.push(chalk.green(`│ ${lineNum} │ `) + chalk.bgGreen.black(` + `) + chalk.green(` ${item.content}`));
+                const lineNum = c.dim(String(item.newLine).padStart(4));
+                lines.push(c.blue('│ ') + c.bgGreen.black(` ${lineNum} │ + ${item.content} `));
             }
         }
         
-        lines.push(chalk.magenta('╰─'));
+        lines.push(c.blue('╰─'));
         return lines.join('\n');
     }
 
     static formatCreate(content, filePath) {
         const lines = content.split('\n');
         const output = [
-            chalk.bold.cyan(`\n╭─ ${filePath} `) + chalk.bgCyan.black(` NEW `),
-            chalk.cyan('│')
+            c.bold.blue(`\n╭─ ${filePath} `) + c.bgGreen.black(` NEW `),
+            c.blue('│')
         ];
         
         lines.slice(0, 10).forEach((line, i) => {
-            const lineNum = chalk.cyan(String(i + 1).padStart(4));
-            output.push(chalk.cyan(`│ ${lineNum} │ `) + chalk.bgGreen.black(` + `) + chalk.green(` ${line}`));
+            const lineNum = c.dim(String(i + 1).padStart(4));
+            output.push(c.blue('│ ') + c.bgGreen.black(` ${lineNum} │ + ${line} `));
         });
         
         if (lines.length > 10) {
-            output.push(chalk.dim(`│ ... ${lines.length - 10} more lines`));
+            output.push(c.blue('│ ') + c.dim(`... ${lines.length - 10} more lines`));
         }
         
-        output.push(chalk.cyan('╰─'));
+        output.push(c.blue('╰─'));
         return output.join('\n');
     }
 }
