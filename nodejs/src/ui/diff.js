@@ -18,7 +18,7 @@ function detectLanguage(filePath) {
     return langMap[ext] || 'plaintext';
 }
 
-// Apply syntax highlighting
+// Apply syntax highlighting with Tokyo Night theme
 function highlight(code, lang) {
     try {
         if (lang === 'plaintext') return code;
@@ -29,20 +29,20 @@ function highlight(code, lang) {
             .replace(/&quot;/g, '"')
             .replace(/&#x27;/g, "'")
             .replace(/&amp;/g, '&')
-            .replace(/<span class="hljs-keyword">(.*?)<\/span>/g, c.magenta('$1'))
-            .replace(/<span class="hljs-string">(.*?)<\/span>/g, c.green('$1'))
-            .replace(/<span class="hljs-number">(.*?)<\/span>/g, c.cyan('$1'))
-            .replace(/<span class="hljs-function">(.*?)<\/span>/g, c.blue('$1'))
-            .replace(/<span class="hljs-comment">(.*?)<\/span>/g, c.dim('$1'))
-            .replace(/<span class="hljs-built_in">(.*?)<\/span>/g, c.yellow('$1'))
-            .replace(/<span class="hljs-title.*?">(.*?)<\/span>/g, c.blue('$1'))
-            .replace(/<span class="hljs-params">(.*?)<\/span>/g, c.white('$1'))
-            .replace(/<span class="hljs-attr">(.*?)<\/span>/g, c.cyan('$1'))
-            .replace(/<span class="hljs-variable">(.*?)<\/span>/g, c.white('$1'))
-            .replace(/<span class="hljs-literal">(.*?)<\/span>/g, c.cyan('$1'))
-            .replace(/<span class="hljs-meta">(.*?)<\/span>/g, c.dim('$1'))
-            .replace(/<span class="hljs-name">(.*?)<\/span>/g, c.blue('$1'))
-            .replace(/<span class="hljs-tag">(.*?)<\/span>/g, c.blue('$1'))
+            .replace(/<span class="hljs-keyword">(.*?)<\/span>/g, c.hex('#bb9af7')('$1'))      // purple
+            .replace(/<span class="hljs-string">(.*?)<\/span>/g, c.hex('#9ece6a')('$1'))       // green
+            .replace(/<span class="hljs-number">(.*?)<\/span>/g, c.hex('#ff9e64')('$1'))       // orange
+            .replace(/<span class="hljs-function">(.*?)<\/span>/g, c.hex('#7aa2f7')('$1'))     // blue
+            .replace(/<span class="hljs-comment">(.*?)<\/span>/g, c.hex('#565f89')('$1'))     // dark gray
+            .replace(/<span class="hljs-built_in">(.*?)<\/span>/g, c.hex('#e0af68')('$1'))    // yellow
+            .replace(/<span class="hljs-title.*?">(.*?)<\/span>/g, c.hex('#7aa2f7')('$1'))    // blue
+            .replace(/<span class="hljs-params">(.*?)<\/span>/g, c.hex('#c0caf5')('$1'))      // light
+            .replace(/<span class="hljs-attr">(.*?)<\/span>/g, c.hex('#7dcfff')('$1'))        // cyan
+            .replace(/<span class="hljs-variable">(.*?)<\/span>/g, c.hex('#c0caf5')('$1'))    // light
+            .replace(/<span class="hljs-literal">(.*?)<\/span>/g, c.hex('#ff9e64')('$1'))     // orange
+            .replace(/<span class="hljs-meta">(.*?)<\/span>/g, c.hex('#565f89')('$1'))        // dark gray
+            .replace(/<span class="hljs-name">(.*?)<\/span>/g, c.hex('#7aa2f7')('$1'))        // blue
+            .replace(/<span class="hljs-tag">(.*?)<\/span>/g, c.hex('#f7768e')('$1'))         // red
             .replace(/<span[^>]*>(.*?)<\/span>/g, '$1');
     } catch (e) {
         return code;
