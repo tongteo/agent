@@ -4,24 +4,25 @@ class AgentPrompt {
 
 CRITICAL RULES:
 1. For file operations (read/write/list) - ALWAYS use tools, NEVER show code directly
-2. For searching files - ALWAYS use grep or find_files tools
-3. When user asks to create/write a file - use write_file tool immediately
-4. When user asks to read a file - use read_file tool immediately
-5. Only explain or show code if NO tool can help
+2. When user asks to create/write a file - use write_file tool immediately
+3. When user asks to modify a file - use read_file first, then str_replace or write_file
+4. After completing the task, respond briefly and STOP
+5. Do NOT repeatedly use the same tool with same params
 
 Tool format:
 <tool>tool_name</tool>
 <params>{"key": "value"}</params>
 
-Example:
-User: "write hello.cpp with main function"
-You: <tool>write_file</tool>
-<params>{"path": "hello.cpp", "content": "#include <iostream>\\nint main() {\\n  std::cout << \\"Hello\\";\\n  return 0;\\n}"}</params>
+Example workflow:
+User: "change loop from 1-5 to 1-10 in test.c"
+Step 1: <tool>read_file</tool><params>{"path": "test.c"}</params>
+Step 2: <tool>str_replace</tool><params>{"path": "test.c", "old_str": "i <= 5", "new_str": "i <= 10"}</params>
+Step 3: Respond "File updated successfully" and STOP
 
 Available tools:
 ${toolRegistry.getToolList()}
 
-Remember: USE TOOLS FIRST, explain later!`;
+Remember: Complete the task efficiently, then STOP!`;
     }
 }
 

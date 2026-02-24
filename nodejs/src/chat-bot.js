@@ -121,7 +121,7 @@ class ChatBot {
         }
     }
 
-    async handleToolCalls(maxIterations = 10) {
+    async handleToolCalls(maxIterations = 5) {
         let iteration = 0;
         
         while (iteration < maxIterations) {
@@ -144,28 +144,32 @@ class ChatBot {
                         console.log(result);
                     }
                     
-                    results.push(`[${tool}] ${result}`);
+                    // Truncate long results
+                    const truncated = result.length > 500 ? result.substring(0, 500) + '...(truncated)' : result;
+                    results.push(`[${tool}] Success`);
                 } catch (e) {
                     results.push(`[${tool}] Error: ${e.message}`);
                 }
             }
             
-            const feedback = `[Tool Results]\n${results.join('\n\n')}\n\n[Note: If task is complete, respond with "DONE" without using any tools]`;
+            const feedback = `[Tool Results]\n${results.join('\n')}\n\nIf task needs more steps, continue. Otherwise respond briefly to confirm.`;
             console.log(chalk.cyan('\n📤 Sending results to AI...\n'));
             
             await this.messageHandler.send(feedback, false);
             
             process.stdout.write('🤖 ');
+            let response = '';
             await this.messageHandler.stream((chunk) => {
+                response += chunk;
                 process.stdout.write(formatMath(chunk));
             });
             console.log('\n');
             
             iteration++;
             
-            // Check if AI says it's done
-            const response = await this.getLastResponse();
-            if (response && (response.includes('DONE') || response.includes('completed') || response.includes('finished'))) {
+            // Stop if no more tool calls in response
+            const hasMoreTools = ToolParser.parse(response).length > 0;
+            if (!hasMoreTools) {
                 break;
             }
         }
