@@ -97,10 +97,52 @@ class ChatBot {
             if (msg) {
                 await this.messageHandler.send(msg);
                 
-                process.stdout.write('\n🤖 ');
+                // Show spinner while streaming
+                const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+                let i = 0;
+                let hasOutput = false;
+                let buffer = '';
+                let hasTool = false;
+                const interval = setInterval(() => {
+                    if (!hasOutput) {
+                        process.stdout.write(`\r🤖 ${spinner[i]} Thinking...`);
+                        i = (i + 1) % spinner.length;
+                    }
+                }, 80);
+                
                 await this.messageHandler.stream((chunk) => {
-                    process.stdout.write(formatMath(chunk));
+                    buffer += chunk;
+                    
+                    // Check if buffer contains complete tool tags
+                    if (buffer.includes('<tool>') || buffer.includes('<params>')) {
+                        hasTool = true;
+                        return;
+                    }
+                    
+                    // If we see start of tool tag or just '<', wait for more
+                    if (/<\s*$|<tool|<param/.test(buffer)) {
+                        return;
+                    }
+                    
+                    // Regular text - clear spinner and show output
+                    if (!hasOutput && !hasTool) {
+                        clearInterval(interval);
+                        process.stdout.write('\r\x1b[K🤖 ');
+                        hasOutput = true;
+                        // Output all buffered content
+                        process.stdout.write(formatMath(buffer));
+                        return;
+                    }
+                    
+                    if (hasOutput) {
+                        process.stdout.write(formatMath(chunk));
+                    }
                 });
+                
+                clearInterval(interval);
+                if (!hasOutput) {
+                    process.stdout.write('\r\x1b[K🤖 ✓ Ready\n');
+                }
                 console.log('\n');
                 
                 // Agent mode: handle tool calls
