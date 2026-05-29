@@ -28,6 +28,17 @@ Remember: str_replace for modifications, write_file only for NEW files!`;
 class ToolParser {
     static parse(text) {
         const calls = [];
+
+        // Parse owl-alpha/longcat format: <longcat_tool_call>cmd</longcat_arg_value>
+        const longcatRegex = /<longcat_tool_call>([\s\S]*?)<\/longcat_arg_value>/g;
+        let m;
+        while ((m = longcatRegex.exec(text)) !== null) {
+            const command = m[1].trim();
+            if (command) calls.push({ tool: 'bash', params: { command } });
+        }
+        if (calls.length) return calls;
+
+        // Fallback: original <tool>/<params> XML format
         const toolRegex = /<tool>(.*?)<\/tool>\s*<params>(.*?)<\/params>/gs;
         let match;
         

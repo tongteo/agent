@@ -18,22 +18,16 @@ class CommandExecutor {
 
     execute(command) {
         try {
-            // Handle cd command
             const cdMatch = command.match(/^\s*cd\s+(.+)$/);
-            if (cdMatch) {
-                return this.handleCd(cdMatch[1]);
-            }
-            
-            // Handle export command
+            if (cdMatch) return this.handleCd(cdMatch[1]);
+
             const exportMatch = command.match(/^\s*export\s+(\w+)=(.+)$/);
-            if (exportMatch) {
-                return this.handleExport(exportMatch[1], exportMatch[2]);
-            }
-            
-            const output = execSync(command, { 
+            if (exportMatch) return this.handleExport(exportMatch[1], exportMatch[2]);
+
+            const output = execSync(command, {
                 encoding: 'utf-8',
                 cwd: this.session.workingDir,
-                env: this.session.envVars,
+                env: { ...this.session.envVars, TERM: 'xterm-256color' },
                 timeout: 30000,
                 shell: '/bin/bash',
                 maxBuffer: 10 * 1024 * 1024
@@ -71,26 +65,28 @@ class CommandExecutor {
         return `Exported: ${varName}=${varValue}`;
     }
 
-    async executeInteractive(command, rl) {
+    async executeInteractive(command, promptManager) {
         if (!pty) {
             return 'Error: node-pty not installed. Run: npm install node-pty';
         }
 
         return new Promise((resolve) => {
-            console.log(chalk.cyan('\n🔄 Starting interactive session... (Ctrl+D or type "exit" to end)\n'));
-            
-            rl.pause();
-            
-            const shell = pty.spawn(command.split(' ')[0], command.split(' ').slice(1), {
+            console.log(chalk.cyan('\n🔄 Starting interactive session... (Ctrl+D to end)\n'));
+
+            // Release terminal fully before handing to pty
+            if (promptManager && promptManager.close) {
+                promptManager.close();
+            }
+
+            const shell = pty.spawn('/bin/bash', ['-c', command], {
                 name: 'xterm-color',
                 cols: process.stdout.columns || 80,
                 rows: process.stdout.rows || 24,
                 cwd: this.session.workingDir,
-                env: this.session.envVars
+                env: { ...this.session.envVars, TERM: 'xterm-256color' }
             });
 
             let output = '';
-
             shell.on('data', (data) => {
                 process.stdout.write(data);
                 output += data;
@@ -98,27 +94,20 @@ class CommandExecutor {
 
             process.stdin.setRawMode(true);
             process.stdin.resume();
-            
             const onData = (data) => {
-                if (data[0] === 4) {
-                    shell.kill();
-                    return;
-                }
+                if (data[0] === 4) { shell.kill(); return; }
                 shell.write(data);
             };
-
             process.stdin.on('data', onData);
 
             shell.on('exit', () => {
                 process.stdin.setRawMode(false);
+                process.stdin.pause();
                 process.stdin.removeListener('data', onData);
-                
-                setImmediate(() => {
-                    if (!rl.closed) {
-                        rl.resume();
-                    }
-                });
-                
+
+                // Reinitialize readline for agent
+                if (promptManager) promptManager.init();
+
                 console.log(chalk.cyan('\n✓ Interactive session ended\n'));
                 resolve(output || '(interactive session completed)');
             });

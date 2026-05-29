@@ -1,15 +1,10 @@
 #!/usr/bin/env node
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { ChatBot } = require('../src/chat-bot');
 
-const apiKey = process.env.OPENROUTER_API_KEY;
-const model = process.env.OPENROUTER_MODEL || 'arcee-ai/trinity-large-preview:free';
+const apiKey = process.env.CUSTOM_API_KEY || process.env.GEMINI_API_KEY || 'dummy';
+const model = process.env.CUSTOM_MODEL || process.env.GEMINI_MODEL || 'gpt-oss:20b';
 const agentMode = process.argv.includes('--agent');
-
-if (!apiKey) {
-    console.error('❌ Error: OPENROUTER_API_KEY not found. Please set it in .env file or environment variable.');
-    process.exit(1);
-}
 
 const bot = new ChatBot(apiKey, model, agentMode);
 bot.init().then(() => bot.chat());

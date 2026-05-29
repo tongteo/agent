@@ -1,5 +1,16 @@
 function extractCommands(text) {
     const commands = [];
+
+    // Pattern 0: owl-alpha longcat format
+    const longcatRegex = /<longcat_tool_call>([\s\S]*?)<\/longcat_arg_value>/g;
+    let lm;
+    while ((lm = longcatRegex.exec(text)) !== null) {
+        lm[1].trim().split('\n').forEach(line => {
+            const cmd = line.trim();
+            if (cmd && !cmd.startsWith('#')) commands.push(cmd);
+        });
+    }
+    if (commands.length) return commands;
     
     // Pattern 1: Standard code blocks ```bash ... ```
     const codeBlocks = text.match(/```(?:bash|sh|shell)?\s*\n([\s\S]*?)```/g);

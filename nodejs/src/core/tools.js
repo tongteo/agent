@@ -27,6 +27,31 @@ class ToolRegistry {
         ).join('\n');
     }
 
+    getToolSchemas() {
+        const paramRegex = /Params: ({.*})/;
+        return Array.from(this.tools.entries()).map(([name, { description }]) => {
+            const match = description.match(paramRegex);
+            let properties = {}, required = [];
+            if (match) {
+                try {
+                    const example = JSON.parse(match[1]);
+                    for (const [k, v] of Object.entries(example)) {
+                        properties[k] = { type: Array.isArray(v) ? 'array' : typeof v };
+                        if (typeof v === 'string' || typeof v === 'number') required.push(k);
+                    }
+                } catch {}
+            }
+            return {
+                type: 'function',
+                function: {
+                    name,
+                    description: description.replace(/\. Params:.*/, ''),
+                    parameters: { type: 'object', properties, required }
+                }
+            };
+        });
+    }
+
     async initLSP(language, rootPath) {
         const lspConfigs = {
             typescript: { cmd: 'typescript-language-server', args: ['--stdio'] },

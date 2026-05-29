@@ -10,7 +10,12 @@ function isInteractive(command) {
     const interactiveCommands = ['vim', 'vi', 'nano', 'emacs', 'ssh', 'python', 'python3', 'node', 'irb', 'mysql', 'psql', 'top', 'htop', 'less', 'more'];
     const cleanCmd = command.trim().replace(/^sudo\s+/, '');
     const cmd = cleanCmd.split(' ')[0];
-    return interactiveCommands.includes(cmd);
+    if (interactiveCommands.includes(cmd)) return true;
+
+    // Scripts run directly (./foo.py, ./foo.sh) or via interpreter with a file
+    if (/\.(py|rb|pl)(['"]?\s|$)/.test(cleanCmd)) return true;
+
+    return false;
 }
 
 async function confirmDangerous(command, question) {
