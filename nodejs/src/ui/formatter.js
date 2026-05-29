@@ -2,7 +2,42 @@ const chalk = require('chalk');
 
 let highlight;
 try {
-    highlight = require('cli-highlight').highlight;
+    const { highlight: hl } = require('cli-highlight');
+    const tokyoNight = {
+        keyword:        chalk.hex('#bb9af7'),
+        built_in:       chalk.hex('#7aa2f7'),
+        type:           chalk.hex('#2ac3de'),
+        literal:        chalk.hex('#ff9e64'),
+        number:         chalk.hex('#ff9e64'),
+        regexp:         chalk.hex('#b4f9f8'),
+        string:         chalk.hex('#9ece6a'),
+        subst:          chalk.hex('#c0caf5'),
+        symbol:         chalk.hex('#9ece6a'),
+        class:          chalk.hex('#2ac3de'),
+        function:       chalk.hex('#7aa2f7'),
+        title:          chalk.hex('#7aa2f7'),
+        params:         chalk.hex('#c0caf5'),
+        comment:        chalk.hex('#565f89'),
+        doctag:         chalk.hex('#565f89'),
+        meta:           chalk.hex('#89ddff'),
+        'meta-keyword': chalk.hex('#bb9af7'),
+        'meta-string':  chalk.hex('#9ece6a'),
+        attr:           chalk.hex('#73daca'),
+        attribute:      chalk.hex('#73daca'),
+        name:           chalk.hex('#f7768e'),
+        tag:            chalk.hex('#f7768e'),
+        variable:       chalk.hex('#c0caf5'),
+        'template-variable': chalk.hex('#ff9e64'),
+        'template-tag': chalk.hex('#bb9af7'),
+        selector_id:    chalk.hex('#7aa2f7'),
+        'selector-class': chalk.hex('#2ac3de'),
+        'selector-attr': chalk.hex('#73daca'),
+        'selector-pseudo': chalk.hex('#bb9af7'),
+        addition:       chalk.hex('#9ece6a'),
+        deletion:       chalk.hex('#f7768e'),
+        default:        chalk.hex('#c0caf5'),
+    };
+    highlight = (code, opts = {}) => hl(code, { ...opts, theme: tokyoNight, ignoreIllegals: true });
 } catch (e) {
     highlight = (code) => code;
 }
@@ -55,10 +90,16 @@ function renderMarkdown(text) {
             const code = codeLines.join('\n');
             const header = chalk.bgBlack.cyan(` ${lang} `);
             let body;
-            try { body = highlight(code, { language: lang, ignoreIllegals: true }); }
-            catch { body = chalk.white(code); }
+            try { body = highlight(code, { language: lang }); }
+            catch { body = chalk.hex('#c0caf5')(code); }
+            const bodyLines = body.split('\n');
+            const MAX = 20;
+            const shown = bodyLines.slice(0, MAX);
+            const hidden = bodyLines.length - MAX;
+            const rendered = shown.map(l => chalk.dim('│ ') + l).join('\n')
+                + (hidden > 0 ? '\n' + chalk.dim(`│ `) + chalk.yellow(`... (${hidden} more lines)`) : '');
             out.push(header);
-            out.push(body.split('\n').map(l => chalk.dim('│ ') + l).join('\n'));
+            out.push(rendered);
             inCode = false;
             continue;
         }

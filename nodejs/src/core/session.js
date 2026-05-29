@@ -9,9 +9,21 @@ class SessionManager {
         this.envVars = { ...process.env };
     }
 
-    save() {}
+    save(messages) {
+        try {
+            fs.writeFileSync(this.sessionFile, JSON.stringify({ workingDir: this.workingDir, messages }, null, 2));
+        } catch {}
+    }
 
-    load() {}
+    load() {
+        try {
+            const data = JSON.parse(fs.readFileSync(this.sessionFile, 'utf-8'));
+            // workingDir intentionally NOT restored — always use cwd at startup
+            return data.messages || [];
+        } catch {
+            return [];
+        }
+    }
 
     reset() {
         this.workingDir = process.cwd();

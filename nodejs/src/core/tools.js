@@ -1,13 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const { LSPClient } = require('./lsp');
 const { DiffFormatter } = require('../ui/diff');
 
 class ToolRegistry {
-    constructor() {
+    constructor(session) {
         this.tools = new Map();
         this.lspClients = new Map();
+        this.session = session;
         this.registerDefaultTools();
     }
 
@@ -122,25 +123,25 @@ class ToolRegistry {
 
         this.register('grep', async ({ pattern, path: searchPath = '.' }) => {
             try {
-                const result = execSync(`grep -r "${pattern}" ${searchPath} 2>/dev/null | head -50 || true`, {
+                const result = execFileSync('grep', ['-r', pattern, searchPath], {
                     encoding: 'utf-8',
                     maxBuffer: 1 * 1024 * 1024,
                     timeout: 5000
                 });
                 return result || 'No matches found';
             } catch (e) {
-                return `Error: ${e.message}`;
+                return e.stdout || 'No matches found';
             }
         }, 'Search in files. Params: {"pattern": "TODO", "path": "."}');
 
         this.register('find_files', async ({ pattern, path: searchPath = '.' }) => {
             try {
-                const result = execSync(`find ${searchPath} -name "${pattern}" 2>/dev/null || true`, {
+                const result = execFileSync('find', [searchPath, '-name', pattern], {
                     encoding: 'utf-8'
                 });
                 return result || 'No files found';
             } catch (e) {
-                return `Error: ${e.message}`;
+                return e.stdout || 'No files found';
             }
         }, 'Find files by name. Params: {"pattern": "*.js", "path": "."}');
 
@@ -153,7 +154,7 @@ class ToolRegistry {
                 if (occurrences === 0) return 'Error: old_str not found';
                 if (occurrences > 1) return `Error: old_str found ${occurrences} times (must be unique)`;
                 
-                const newContent = content.replace(old_str, new_str);
+                const newContent = content.slice(0, content.indexOf(old_str)) + new_str + content.slice(content.indexOf(old_str) + old_str.length);
                 fs.writeFileSync(filePath, newContent);
                 
                 const diff = DiffFormatter.formatDiff(content, newContent, filePath);
@@ -220,7 +221,7 @@ class ToolRegistry {
                 
                 let client = this.lspClients.get(lang);
                 if (!client) {
-                    client = await this.initLSP(lang, process.cwd());
+                    client = await this.initLSP(lang, this.session?.workingDir || process.cwd());
                     if (!client) return 'LSP not available';
                 }
                 
@@ -247,7 +248,7 @@ class ToolRegistry {
                 
                 let client = this.lspClients.get(lang);
                 if (!client) {
-                    client = await this.initLSP(lang, process.cwd());
+                    client = await this.initLSP(lang, this.session?.workingDir || process.cwd());
                     if (!client) return 'LSP not available';
                 }
                 
@@ -274,7 +275,7 @@ class ToolRegistry {
                 
                 let client = this.lspClients.get(lang);
                 if (!client) {
-                    client = await this.initLSP(lang, process.cwd());
+                    client = await this.initLSP(lang, this.session?.workingDir || process.cwd());
                     if (!client) return 'LSP not available';
                 }
                 
@@ -301,7 +302,7 @@ class ToolRegistry {
                 
                 let client = this.lspClients.get(lang);
                 if (!client) {
-                    client = await this.initLSP(lang, process.cwd());
+                    client = await this.initLSP(lang, this.session?.workingDir || process.cwd());
                     if (!client) return 'LSP not available';
                 }
                 
@@ -328,7 +329,7 @@ class ToolRegistry {
                 
                 let client = this.lspClients.get(lang);
                 if (!client) {
-                    client = await this.initLSP(lang, process.cwd());
+                    client = await this.initLSP(lang, this.session?.workingDir || process.cwd());
                     if (!client) return 'LSP not available';
                 }
                 
@@ -345,7 +346,7 @@ class ToolRegistry {
                 const client = Array.from(this.lspClients.values())[0];
                 if (!client) {
                     // Try to init typescript LSP as default
-                    const tsClient = await this.initLSP('javascript', process.cwd());
+                    const tsClient = await this.initLSP('javascript', this.session?.workingDir || process.cwd());
                     if (!tsClient) return 'LSP not available';
                     const result = await tsClient.getWorkspaceSymbols(query);
                     return JSON.stringify(result, null, 2);
@@ -414,7 +415,7 @@ class ToolRegistry {
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
-                    cwd: process.cwd()
+                    cwd: this.session?.workingDir || process.cwd()
                 };
                 
                 // Add stdin if provided
@@ -437,7 +438,7 @@ class ToolRegistry {
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
-                    cwd: working_dir || process.cwd()
+                    cwd: working_dir || this.session?.workingDir || process.cwd()
                 });
                 return result || '(no output)';
             } catch (e) {
@@ -468,7 +469,9 @@ class ToolRegistry {
                 } else if (action === 'log') {
                     cmd = 'git log --oneline -10';
                 } else if (action === 'commit') {
-                    cmd = `git add -A && git commit -m "${message}"`;
+                    execFileSync('git', ['add', '-A'], { encoding: 'utf-8', timeout: 30000 });
+                    const result = execFileSync('git', ['commit', '-m', message], { encoding: 'utf-8', timeout: 30000 });
+                    return result || 'Success';
                 } else if (action === 'push') {
                     cmd = 'git push';
                 } else if (action === 'pull') {
@@ -497,9 +500,9 @@ class ToolRegistry {
                     file: filePath,
                     language: ext,
                     total_lines: lines.length,
-                    code_lines: lines.filter(l => l.trim() && !l.trim().startsWith('//')).length,
+                    code_lines: lines.filter(l => l.trim() && !l.trim().match(/^(\/\/|#|\*|\/\*)/)).length,
                     blank_lines: lines.filter(l => !l.trim()).length,
-                    comment_lines: lines.filter(l => l.trim().startsWith('//')).length
+                    comment_lines: lines.filter(l => l.trim().match(/^(\/\/|#|\*|\/\*)/)).length
                 };
                 
                 // Find functions/classes

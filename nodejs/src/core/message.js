@@ -8,7 +8,7 @@ class MessageHandler {
     }
 
     getSystemContext() {
-        const cwd = process.cwd();
+        const cwd = this.session.workingDir || process.cwd();
         if (this.agentPrompt) {
             return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n\n${this.agentPrompt}`;
         }
@@ -33,6 +33,9 @@ class MessageHandler {
                 if (onChunk) onChunk(chunk);
             }
         } catch (error) {
+            // Remove the dangling user message so history stays consistent
+            const msgs = this.model.messages;
+            if (msgs.length && msgs[msgs.length - 1].role === 'user') msgs.pop();
             const errMsg = `Error: ${error.message}`;
             if (onChunk) onChunk(errMsg);
             fullContent = errMsg;

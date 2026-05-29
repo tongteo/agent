@@ -18,17 +18,18 @@ class CommandExecutor {
 
     execute(command) {
         try {
-            const cdMatch = command.match(/^\s*cd\s+(.+)$/);
+            const cdMatch = command.match(/^\s*cd\s+([^&|;]+)$/);
             if (cdMatch) return this.handleCd(cdMatch[1]);
 
             const exportMatch = command.match(/^\s*export\s+(\w+)=(.+)$/);
             if (exportMatch) return this.handleExport(exportMatch[1], exportMatch[2]);
 
+            const isPackageManager = /^\s*(pkg|apt|apt-get|brew|pip|pip3|npm|yarn|cargo)\s/.test(command);
             const output = execSync(command, {
                 encoding: 'utf-8',
                 cwd: this.session.workingDir,
                 env: { ...this.session.envVars, TERM: 'xterm-256color' },
-                timeout: 30000,
+                timeout: isPackageManager ? 120000 : 30000,
                 shell: '/bin/bash',
                 maxBuffer: 10 * 1024 * 1024
             });

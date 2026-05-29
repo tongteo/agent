@@ -30,7 +30,7 @@ class SubagentManager {
                 fullQuery = `Context: ${relevant_context}\n\nTask: ${query}`;
             }
             
-            const response = await bot.chat(fullQuery);
+            const response = await bot.chatOnce(fullQuery);
             
             this.activeSubagents.delete(subagentId);
             

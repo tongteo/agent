@@ -1,19 +1,23 @@
 const chalk = require('chalk');
 
-const DANGEROUS_COMMANDS = ['rm -rf', 'dd if=', 'mkfs', ':(){:|:&};:', 'chmod -R 777', '> /dev/sda'];
+const DANGEROUS_COMMANDS = ['rm -rf', 'rm -r /', 'sudo rm', 'dd if=', 'mkfs', ':(){:|:&};:', 'chmod -R 777', '> /dev/sda'];
 
 function isDangerous(command) {
-    return DANGEROUS_COMMANDS.some(dangerous => command.includes(dangerous));
+    return DANGEROUS_COMMANDS.some(d => command.includes(d))
+        || /\|\s*(ba)?sh\b/.test(command)
+        || /\bwget\b.+\|/.test(command)
+        || /\bcurl\b.+\|/.test(command);
 }
 
 function isInteractive(command) {
-    const interactiveCommands = ['vim', 'vi', 'nano', 'emacs', 'ssh', 'python', 'python3', 'node', 'irb', 'mysql', 'psql', 'top', 'htop', 'less', 'more'];
+    const interactiveCommands = ['vim', 'vi', 'nano', 'emacs', 'ssh', 'irb', 'mysql', 'psql', 'top', 'htop', 'less', 'more'];
     const cleanCmd = command.trim().replace(/^sudo\s+/, '');
     const cmd = cleanCmd.split(' ')[0];
     if (interactiveCommands.includes(cmd)) return true;
 
-    // Scripts run directly (./foo.py, ./foo.sh) or via interpreter with a file
-    if (/\.(py|rb|pl)(['"]?\s|$)/.test(cleanCmd)) return true;
+    // Interpreter alone (no file arg) → interactive REPL
+    const replInterpreters = ['python', 'python3', 'node', 'ruby', 'perl'];
+    if (replInterpreters.includes(cmd) && cleanCmd.split(/\s+/).length === 1) return true;
 
     return false;
 }

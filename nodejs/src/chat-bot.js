@@ -22,7 +22,7 @@ class ChatBot {
         this.model = null;
         this.messageHandler = null;
         this.executor = null;
-        this.tools = agentMode ? new ToolRegistry() : null;
+        this.tools = agentMode ? new ToolRegistry(this.session) : null;
         this.subagentManager = agentMode ? new SubagentManager(apiKey, model, process.cwd()) : null;
         this._lastHandledResponse = null;
     }
@@ -81,6 +81,14 @@ class ChatBot {
         console.log("\n🔄 New conversation started (working directory and env vars reset)\n");
     }
 
+    async chatOnce(query) {
+        await this.messageHandler.send(query);
+        let full = '';
+        await this.messageHandler.stream((chunk) => { full += chunk; });
+        if (this.agentMode) await this.handleToolCalls();
+        return full;
+    }
+
     async chat() {
         this.prompt.init();
 
@@ -118,11 +126,12 @@ class ChatBot {
                 let si = 0;
                 let full = '';
                 const interval = setInterval(() => process.stdout.write(`\r🤖 ${spinner[si++ % spinner.length]}`), 80);
-
-                await this.messageHandler.stream((chunk) => { full += chunk; });
-
-                clearInterval(interval);
-                process.stdout.write('\r\x1b[K');
+                try {
+                    await this.messageHandler.stream((chunk) => { full += chunk; });
+                } finally {
+                    clearInterval(interval);
+                    process.stdout.write('\r\x1b[K');
+                }
 
                 if (full.trim() && !full.includes('<tool>')) {
                     console.log('🤖 ' + renderMarkdown(full.trim()));
@@ -179,7 +188,7 @@ class ChatBot {
                         console.log(chalk.dim('  │ ') + lines.join('\n' + chalk.dim('  │ ')));
                     }
 
-                    const truncated = result.length > 500 ? result.substring(0, 500) + '...(truncated)' : result;
+                    const truncated = result.length > 8000 ? result.substring(0, 8000) + '...(truncated)' : result;
                     results.push({ tool, id, result: truncated });
                 } catch (e) {
                     clearInterval(spin);
@@ -204,11 +213,12 @@ class ChatBot {
             let si = 0;
             let full = '';
             const interval = setInterval(() => process.stdout.write(`\r🤖 ${spinner[si++ % spinner.length]}`), 80);
-
-            await this.messageHandler.stream((chunk) => { full += chunk; });
-
-            clearInterval(interval);
-            process.stdout.write('\r\x1b[K');
+            try {
+                await this.messageHandler.stream((chunk) => { full += chunk; });
+            } finally {
+                clearInterval(interval);
+                process.stdout.write('\r\x1b[K');
+            }
 
             if (full.trim() && !full.includes('<tool>')) {
                 console.log('🤖 ' + renderMarkdown(full.trim()));
