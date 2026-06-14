@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '../.env'), quiet: true });
 const { ChatBot } = require('../src/chat-bot');
 
 const apiKey = process.env.CUSTOM_API_KEY || process.env.GEMINI_API_KEY || 'dummy';
 const model = process.env.CUSTOM_MODEL || process.env.GEMINI_MODEL || 'gpt-oss:20b';
-const agentMode = process.argv.includes('--agent');
+const agentMode = !process.argv.includes('--chat'); // agent mode by default
 
 const bot = new ChatBot(apiKey, model, agentMode);
 bot.init().then(() => bot.chat());

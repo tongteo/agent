@@ -9,7 +9,7 @@ const { isDangerous, isInteractive } = require('./commands/validator');
 const { formatOutput, formatMath, renderMarkdown } = require('./ui/formatter');
 const { PromptManager } = require('./ui/prompt');
 const { ToolRegistry } = require('./core/tools');
-const { AgentPrompt, ToolParser } = require('./core/agent');
+const { AgentPrompt, ToolParser, IntentParser } = require('./core/agent');
 const { SubagentManager } = require('./core/subagent');
 
 class ChatBot {
@@ -28,18 +28,26 @@ class ChatBot {
     }
 
     async init() {
-        const mode = this.agentMode ? ' (Agent Mode)' : '';
-        console.log(`🚀 Starting${mode}...\n`);
-        
         this.session.load();
         
         const baseUrl = process.env.CUSTOM_API_BASE;
         const openrouterKey = process.env.OPENROUTER_API_KEY;
-        if (openrouterKey) {
+        const ollamaModel = process.env.OLLAMA_MODEL;
+        const geminiCookies = process.env.GEMINI_COOKIES;
+        if (geminiCookies) {
+            const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
+            this.model = new GeminiCookiesAdapter();
+        } else if (ollamaModel) {
+            const { OllamaAdapter } = require('./models/ollama');
+            const ollamaBase = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+            this.model = new OllamaAdapter(ollamaModel, ollamaBase);
+            if (this.agentMode && this.tools) {
+                this.model.tools = this.tools.getToolSchemas();
+            }
+        } else if (openrouterKey) {
             const { OpenRouterAdapter } = require('./models/openrouter');
             const orModel = process.env.OPENROUTER_MODEL || 'openrouter/owl-alpha';
             this.model = new OpenRouterAdapter(openrouterKey, orModel);
-            // Enable native function calling for agent mode
             if (this.agentMode && this.tools) {
                 this.model.tools = this.tools.getToolSchemas();
             }
@@ -50,9 +58,12 @@ class ChatBot {
         }
         await this.model.init();
 
-        // For OpenRouter with function calling, use minimal system prompt
         const agentPrompt = this.agentMode
-            ? (this.model.tools ? 'You are an AI agent. Use the provided tools to complete tasks. After all tasks are done, respond briefly.' : AgentPrompt.getSystemPrompt(this.tools))
+            ? (this.model.tools
+                ? 'You are an AI agent. Use the provided tools to complete tasks. After all tasks are done, respond briefly.'
+                : this.model.model === 'gemini-web'
+                    ? AgentPrompt.getCompactPrompt(this.tools)
+                    : AgentPrompt.getSystemPrompt(this.tools))
             : null;
         this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt);
         this.executor = new CommandExecutor(this.session);
@@ -60,10 +71,31 @@ class ChatBot {
         if (this.agentMode && this.subagentManager) {
             this.tools.setSubagentManager(this.subagentManager);
         }
-        
-        console.log(`✓ Ready! Using ${chalk.bold(this.model.model)}${mode}`);
-        console.log(chalk.gray(`  Commands: 'exit' to quit | 'clear' to reset | '/model <name>' to change model`));
-        console.log(chalk.gray(`  Tip: Press Tab for autocomplete\n`));
+
+        this._printHeader();
+    }
+
+    _printHeader() {
+        const cols = process.stdout.columns || 80;
+        const modelName = this.model.model || 'unknown';
+        const mode = this.agentMode ? 'agent' : 'chat';
+        const modeColor = this.agentMode ? chalk.magentaBright : chalk.cyanBright;
+        const cwd = process.cwd().replace(process.env.HOME, '~');
+
+        // top border
+        process.stdout.write(chalk.dim('─'.repeat(cols)) + '\n');
+
+        // title line
+        const title = chalk.bold.white(' agent-cli ') + chalk.dim('·') +
+            ' model ' + chalk.cyan(modelName) + chalk.dim(' · ') +
+            'mode ' + modeColor(mode) + chalk.dim(' · ') +
+            chalk.dim(cwd);
+        process.stdout.write(' ' + title + '\n');
+
+        // bottom border + hint
+        process.stdout.write(chalk.dim('─'.repeat(cols)) + '\n');
+        process.stdout.write(chalk.dim('  type your message · exit · clear · /model <name>\n'));
+        process.stdout.write('\n');
     }
 
     _printUsage() {
@@ -78,7 +110,8 @@ class ChatBot {
         this.model.reset();
         this.messageHandler.reset();
         this.session.reset();
-        console.log("\n🔄 New conversation started (working directory and env vars reset)\n");
+        process.stdout.write('\x1b[2J\x1b[H'); // clear screen
+        this._printHeader();
     }
 
     async chatOnce(query) {
@@ -93,11 +126,11 @@ class ChatBot {
         this.prompt.init();
 
         while (true) {
-            const input = await this.prompt.ask('👤 You: ');
+            const input = await this.prompt.ask(chalk.bold.green('❯ '));
             const msg = input.trim();
 
             if (msg.toLowerCase() === 'exit') {
-                console.log("\n👋 Goodbye!");
+                process.stdout.write(chalk.dim('\n  bye\n\n'));
                 this.prompt.close();
                 process.exit(0);
             }
@@ -108,12 +141,17 @@ class ChatBot {
             }
 
             if (msg.startsWith('/model')) {
-                const newModel = msg.split(' ')[1];
-                if (newModel) {
-                    this.messageHandler.model.model = newModel;
-                    console.log(chalk.green(`✓ Model changed to: ${newModel}\n`));
+                await this._handleModelCommand(msg);
+                continue;
+            }
+
+            if (msg === '/think' || msg === '/think on' || msg === '/think off') {
+                const model = this.messageHandler.model;
+                if (typeof model.showThinking === 'undefined') {
+                    console.log('Current model does not support thinking toggle\n');
                 } else {
-                    console.log(chalk.cyan(`Current model: ${this.messageHandler.model.model}\n`));
+                    model.showThinking = msg !== '/think off';
+                    console.log(`Thinking display: ${model.showThinking ? 'ON' : 'OFF'}\n`);
                 }
                 continue;
             }
@@ -125,7 +163,7 @@ class ChatBot {
                 const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
                 let si = 0;
                 let full = '';
-                const interval = setInterval(() => process.stdout.write(`\r🤖 ${spinner[si++ % spinner.length]}`), 80);
+                const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
                 try {
                     await this.messageHandler.stream((chunk) => { full += chunk; });
                 } finally {
@@ -133,8 +171,9 @@ class ChatBot {
                     process.stdout.write('\r\x1b[K');
                 }
 
-                if (full.trim() && !full.includes('<tool>')) {
-                    console.log('🤖 ' + renderMarkdown(full.trim()));
+                const hasToolCall = full.includes('<tool>') || full.includes('&lt;tool&gt;') || full.includes('<longcat_tool_call>');
+                if (full.trim() && !hasToolCall) {
+                    process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
                 }
                 this._printUsage();
                 console.log('');
@@ -166,6 +205,19 @@ class ChatBot {
                 const lastResponse = await this.getLastResponse();
                 if (!lastResponse) break;
                 toolCalls = ToolParser.parse(lastResponse).map(tc => ({ ...tc, id: null }));
+                // Fallback: intent parsing for models that don't follow XML format (e.g. gemini-web)
+                if (toolCalls.length === 0 && this.model.model === 'gemini-web') {
+                    const ctx = { lastFile: this._lastMentionedFile(lastResponse) };
+                    toolCalls = IntentParser.parse(lastResponse, ctx).map(tc => ({ ...tc, id: null }));
+                }
+                // Fallback: extract code block and write to mentioned file
+                if (toolCalls.length === 0 && this.model.model === 'gemini-web') {
+                    const fileMatch = lastResponse.match(/(?:file\s+(?:named?\s+)?|tên\s+(?:là\s+)?|lưu\s+(?:vào\s+)?(?:file\s+)?)[`'"]?([\w./]+\.\w+)[`'"]?/i);
+                    const codeMatch = lastResponse.match(/```(?:\w+)?\n([\s\S]+?)```/);
+                    if (fileMatch && codeMatch && codeMatch[1].length > 100) {
+                        toolCalls = [{ tool: 'write_file', params: { path: fileMatch[1], content: codeMatch[1].trim() }, id: null }];
+                    }
+                }
             }
 
             if (toolCalls.length === 0) break;
@@ -212,7 +264,7 @@ class ChatBot {
             const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
             let si = 0;
             let full = '';
-            const interval = setInterval(() => process.stdout.write(`\r🤖 ${spinner[si++ % spinner.length]}`), 80);
+            const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
             try {
                 await this.messageHandler.stream((chunk) => { full += chunk; });
             } finally {
@@ -221,7 +273,7 @@ class ChatBot {
             }
 
             if (full.trim() && !full.includes('<tool>')) {
-                console.log('🤖 ' + renderMarkdown(full.trim()));
+                process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
             }
             console.log('');
             
@@ -309,7 +361,7 @@ class ChatBot {
             await this.messageHandler.send(`[Command Results]\n${outputs.join('\n')}`, false);
             let full = '';
             await this.messageHandler.stream((chunk) => { full += chunk; });
-            if (full.trim()) console.log('🤖 ' + renderMarkdown(full.trim()));
+            if (full.trim()) process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
             this._printUsage();
             console.log('');
 
@@ -317,10 +369,87 @@ class ChatBot {
         }
     }
 
+    async _handleModelCommand(msg) {
+        const parts = msg.trim().split(/\s+/);
+        // /model list
+        if (parts[1] === 'list') {
+            await this._listModels();
+            return;
+        }
+        // /model <provider> <model>  OR  /model <model>
+        if (parts.length >= 3) {
+            await this._switchProvider(parts[1], parts.slice(2).join(' '));
+        } else if (parts.length === 2) {
+            // Just change model name on current provider
+            this.messageHandler.model.model = parts[1];
+            console.log(chalk.green(`✓ Model: ${parts[1]}\n`));
+        } else {
+            const cur = this.messageHandler.model;
+            const provider = cur.constructor.name.replace('Adapter', '').toLowerCase();
+            console.log(chalk.cyan(`Provider: ${provider}  Model: ${cur.model}`));
+            console.log(chalk.dim('Usage: /model list | /model <name> | /model <provider> <model>'));
+            console.log(chalk.dim('Providers: ollama, openrouter, gemini, custom\n'));
+        }
+    }
+
+    async _listModels() {
+        const axios = require('axios');
+        const base = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+        try {
+            const { data } = await axios.get(`${base}/api/tags`, { timeout: 3000 });
+            const models = data.models?.map(m => m.name) || [];
+            console.log(chalk.cyan('Ollama models:'));
+            models.forEach(m => console.log('  ' + m));
+            if (!models.length) console.log(chalk.dim('  (none)'));
+        } catch {
+            console.log(chalk.dim('Ollama not available'));
+        }
+        console.log('');
+    }
+
+    async _switchProvider(provider, modelName) {
+        const prevMessages = this.messageHandler.model.messages.slice(); // keep history
+        let newModel;
+        switch (provider) {
+            case 'ollama': {
+                const { OllamaAdapter } = require('./models/ollama');
+                newModel = new OllamaAdapter(modelName, process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
+                break;
+            }
+            case 'openrouter': {
+                const { OpenRouterAdapter } = require('./models/openrouter');
+                newModel = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY, modelName);
+                break;
+            }
+            case 'gemini': {
+                const { GeminiAdapter } = require('./models/gemini');
+                newModel = new GeminiAdapter(process.env.GEMINI_API_KEY || this.apiKey, modelName);
+                break;
+            }
+            case 'custom': {
+                const { CustomAdapter } = require('./models/custom');
+                newModel = new CustomAdapter(process.env.CUSTOM_API_KEY || this.apiKey, modelName, process.env.CUSTOM_API_BASE);
+                break;
+            }
+            default:
+                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom\n`));
+                return;
+        }
+        newModel.messages = prevMessages;
+        if (this.agentMode && this.tools) newModel.tools = this.tools.getToolSchemas();
+        this.messageHandler.model = newModel;
+        console.log(chalk.green(`✓ Switched to ${provider}/${modelName}\n`));
+    }
+
     async getLastResponse() {
         const messages = this.model.messages.filter(m => m.role === 'assistant');
         if (messages.length === 0) return null;
         return messages[messages.length - 1].content;
+    }
+
+    _lastMentionedFile(text) {
+        const m = text?.match(/\b([\w./][\w./]*\.\w+)\b/);
+        return m?.[1] || null;
     }
 
     cleanup() {

@@ -381,8 +381,13 @@ class ToolRegistry {
         }, 'Delegate tasks to subagents. Params: {"command": "InvokeSubagents", "content": {"subagents": [{"query": "task", "agent_name": "default", "relevant_context": "..."}]}}');
 
         // Execute tool
-        this.register('execute', async ({ file, args = '', stdin = '' }) => {
+        this.register('execute', async ({ file, command, args = '', stdin = '' }) => {
+            // If called with `command` param (shell command), delegate to bash tool
+            if (command && !file) {
+                return this.tools.get('bash').fn({ command });
+            }
             try {
+                if (!file) return 'Error: missing required param "file"';
                 const ext = file.split('.').pop();
                 let cmd;
                 
