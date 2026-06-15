@@ -1,3 +1,3 @@
 # Agent CLI
 
-AI agent in your terminal. Powered by OpenRouter.
+AI agent in your terminal.

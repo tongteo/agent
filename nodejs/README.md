@@ -1,8 +1,8 @@
 # Agent CLI
 
-AI agent chạy trong terminal. Hỗ trợ nhiều model: Gemini, Claude, OpenRouter, Ollama, Custom API.
+AI agent running in terminal. Supports multiple models: Gemini, Claude, OpenRouter, Ollama, Custom API.
 
-## Cài đặt
+## Installation
 
 ```bash
 cd nodejs
@@ -10,11 +10,11 @@ npm install
 cp .env.example .env
 ```
 
-## Cấu hình `.env`
+## `.env` Configuration
 
-Chọn một trong các provider:
+Choose one of the providers:
 
-| Provider | Biến cần set |
+| Provider | Required variables |
 |---|---|
 | Gemini Web (cookies) | `GEMINI_COOKIES=1` |
 | Claude Web (cookies) | `CLAUDE_COOKIES=1` |
@@ -23,24 +23,24 @@ Chọn một trong các provider:
 | Ollama | `OLLAMA_MODEL` |
 | Custom API | `CUSTOM_API_BASE`, `CUSTOM_API_KEY`, `CUSTOM_MODEL` |
 
-**Gemini/Claude Web** cần file cookies tại:
+**Gemini/Claude Web** requires cookies files at:
 - `src/bridges/gemini_cookies.json`
 - `src/bridges/claude_cookies.json`
 
-## Chạy
+## Run
 
 ```bash
-node bin/openrouter          # agent mode (mặc định)
+node bin/openrouter          # agent mode (default)
 node bin/openrouter --chat   # chat mode
 ```
 
-## Lệnh trong chat
+## Chat Commands
 
-| Lệnh | Mô tả |
+| Command | Description |
 |---|---|
-| `exit` | Thoát |
-| `clear` | Xoá lịch sử |
-| `/model <tên>` | Đổi model |
-| `/model <provider> <tên>` | Đổi provider |
-| `/model list` | Liệt kê model Ollama |
-| `/think` | Bật/tắt hiển thị thinking |
+| `exit` | Quit |
+| `clear` | Clear history |
+| `/model <name>` | Switch model |
+| `/model <provider> <name>` | Switch provider |
+| `/model list` | List Ollama models |
+| `/think` | Toggle thinking display |
