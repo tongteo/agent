@@ -7,9 +7,7 @@
     "openrouter-cli": "./bin/openrouter"
   },
   "scripts": {
-    "start": "node bin/openrouter",
-    "test": "mocha test/**/*.test.js --timeout 5000",
-    "test:watch": "mocha test/**/*.test.js --watch"
+    "start": "node bin/openrouter"
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -19,9 +17,5 @@
     "node-pty": "^1.0.0",
     "vscode-jsonrpc": "^8.2.0",
     "vscode-languageserver-protocol": "^3.17.5"
-  },
-  "devDependencies": {
-    "chai": "^6.2.2",
-    "mocha": "^11.7.5"
   }
 }
