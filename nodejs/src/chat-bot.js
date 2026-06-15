@@ -34,7 +34,11 @@ class ChatBot {
         const openrouterKey = process.env.OPENROUTER_API_KEY;
         const ollamaModel = process.env.OLLAMA_MODEL;
         const geminiCookies = process.env.GEMINI_COOKIES;
-        if (geminiCookies) {
+        const claudeCookies = process.env.CLAUDE_COOKIES;
+        if (claudeCookies) {
+            const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
+            this.model = new ClaudeCookiesAdapter();
+        } else if (geminiCookies) {
             const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
             this.model = new GeminiCookiesAdapter();
         } else if (ollamaModel) {
@@ -61,7 +65,7 @@ class ChatBot {
         const agentPrompt = this.agentMode
             ? (this.model.tools
                 ? 'You are an AI agent. Use the provided tools to complete tasks. After all tasks are done, respond briefly.'
-                : this.model.model === 'gemini-web'
+                : (this.model.model === 'gemini-web' || this.model.model === 'claude-web')
                     ? AgentPrompt.getCompactPrompt(this.tools)
                     : AgentPrompt.getSystemPrompt(this.tools))
             : null;
@@ -76,26 +80,20 @@ class ChatBot {
     }
 
     _printHeader() {
-        const cols = process.stdout.columns || 80;
         const modelName = this.model.model || 'unknown';
         const mode = this.agentMode ? 'agent' : 'chat';
         const modeColor = this.agentMode ? chalk.magentaBright : chalk.cyanBright;
         const cwd = process.cwd().replace(process.env.HOME, '~');
 
-        // top border
-        process.stdout.write(chalk.dim('─'.repeat(cols)) + '\n');
-
-        // title line
-        const title = chalk.bold.white(' agent-cli ') + chalk.dim('·') +
-            ' model ' + chalk.cyan(modelName) + chalk.dim(' · ') +
-            'mode ' + modeColor(mode) + chalk.dim(' · ') +
-            chalk.dim(cwd);
-        process.stdout.write(' ' + title + '\n');
-
-        // bottom border + hint
-        process.stdout.write(chalk.dim('─'.repeat(cols)) + '\n');
-        process.stdout.write(chalk.dim('  type your message · exit · clear · /model <name>\n'));
-        process.stdout.write('\n');
+        process.stdout.write(
+            '\n' +
+            chalk.bold.white('  agent-cli') +
+            chalk.dim('  model ') + chalk.cyan(modelName) +
+            chalk.dim('  mode ') + modeColor(mode) +
+            chalk.dim('  ' + cwd) + '\n' +
+            chalk.dim('  exit  clear  /model <name>  [Tab]\n') +
+            '\n'
+        );
     }
 
     _printUsage() {
@@ -126,7 +124,7 @@ class ChatBot {
         this.prompt.init();
 
         while (true) {
-            const input = await this.prompt.ask(chalk.bold.green('❯ '));
+            const input = await this.prompt.ask(chalk.bold.green('❯ '), this._getCompletions());
             const msg = input.trim();
 
             if (msg.toLowerCase() === 'exit') {
@@ -157,23 +155,63 @@ class ChatBot {
             }
 
             if (msg) {
-                await this.messageHandler.send(msg);
+                // Pre-flight: if agent mode and user input is a clear action command,
+                // dispatch tool directly without asking Gemini
+                if (this.agentMode && this.model.model === 'gemini-web') {
+                    const directCall = IntentParser.parseUserInput(msg);
+                    if (directCall) {
+                        const { tool, params } = directCall;
+                        const label = params.path || params.command || '';
+                        process.stdout.write(`  ${chalk.green('✓')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}\n`);
+                        try {
+                            const result = await this.tools.execute(tool, params);
+                            const displayTools = ['execute', 'bash', 'run_command'];
+                            if (displayTools.includes(tool) && result) {
+                                const lines = result.trim().split('\n').slice(0, 20);
+                                console.log(chalk.dim(lines.join('\n')));
+                            }
+                            // Feed result back to model for follow-up
+                            await this.messageHandler.send(`User ran: ${msg}\nResult:\n${result}`, false);
+                        } catch (e) {
+                            process.stdout.write(`  ${chalk.red('✗')} ${e.message}\n`);
+                            await this.messageHandler.send(`User ran: ${msg}\nError: ${e.message}`, false);
+                        }
+                    } else {
+                        await this.messageHandler.send(msg);
+                    }
+                } else {
+                    await this.messageHandler.send(msg);
+                }
                 
                 // Spinner while waiting
                 const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
                 let si = 0;
                 let full = '';
+                let aborted = false;
                 const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
+                const sigintHandler = () => {
+                    aborted = true;
+                    this.model.abort?.();
+                };
+                process.removeListener('SIGINT', this.prompt._sigintDefault);
+                process.once('SIGINT', sigintHandler);
                 try {
                     await this.messageHandler.stream((chunk) => { full += chunk; });
                 } finally {
                     clearInterval(interval);
+                    process.removeListener('SIGINT', sigintHandler);
+                    process.addListener('SIGINT', this.prompt._sigintDefault);
                     process.stdout.write('\r\x1b[K');
+                }
+
+                if (aborted) {
+                    process.stdout.write(chalk.dim('  ↩ interrupted\n\n'));
+                    continue;
                 }
 
                 const hasToolCall = full.includes('<tool>') || full.includes('&lt;tool&gt;') || full.includes('<longcat_tool_call>');
                 if (full.trim() && !hasToolCall) {
-                    process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
+                    process.stdout.write(renderMarkdown(full.trim()) + '\n');
                 }
                 this._printUsage();
                 console.log('');
@@ -188,7 +226,7 @@ class ChatBot {
         }
     }
 
-    async handleToolCalls(maxIterations = 5) {
+    async handleToolCalls(maxIterations = 20) {
         let iteration = 0;
 
         while (iteration < maxIterations) {
@@ -237,7 +275,7 @@ class ChatBot {
                     const displayTools = ['execute', 'bash', 'tree', 'git', 'analyze_code', 'debug_trace'];
                     if (displayTools.includes(tool) && result && !result.startsWith('Error:')) {
                         const lines = result.trim().split('\n').slice(0, 20);
-                        console.log(chalk.dim('  │ ') + lines.join('\n' + chalk.dim('  │ ')));
+                        console.log(chalk.dim(lines.join('\n')));
                     }
 
                     const truncated = result.length > 8000 ? result.substring(0, 8000) + '...(truncated)' : result;
@@ -264,19 +302,26 @@ class ChatBot {
             const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
             let si = 0;
             let full = '';
+            let aborted = false;
+            const sigintHandler = () => { aborted = true; this.model.abort?.(); };
+            process.removeListener('SIGINT', this.prompt._sigintDefault);
+            process.once('SIGINT', sigintHandler);
             const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
             try {
                 await this.messageHandler.stream((chunk) => { full += chunk; });
             } finally {
                 clearInterval(interval);
+                process.removeListener('SIGINT', sigintHandler);
+                process.addListener('SIGINT', this.prompt._sigintDefault);
                 process.stdout.write('\r\x1b[K');
             }
 
             if (full.trim() && !full.includes('<tool>')) {
-                process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
+                process.stdout.write(renderMarkdown(full.trim()) + '\n');
             }
             console.log('');
-            
+
+            if (aborted) break;
             iteration++;
         }
         
@@ -286,7 +331,7 @@ class ChatBot {
     }
 
     async handleCommands() {
-        const maxIterations = 5;
+        const maxIterations = 20;
         let iteration = 0;
 
         while (iteration < maxIterations) {
@@ -335,7 +380,7 @@ class ChatBot {
                     const output = this.executor.execute(cmd);
                     if (output?.trim()) {
                         const lines = output.trim().split('\n').slice(0, 20);
-                        process.stdout.write(chalk.dim('  │ ') + lines.join('\n' + chalk.dim('  │ ')) + '\n');
+                        process.stdout.write(chalk.dim(lines.join('\n')) + '\n');
                     }
                     outputs.push(`$ ${preview}\n${output}`);
                 }
@@ -350,7 +395,7 @@ class ChatBot {
                     const output = this.executor.execute(cmd);
                     if (output?.trim()) {
                         const lines = output.trim().split('\n').slice(0, 20);
-                        process.stdout.write(chalk.dim('  │ ') + lines.join('\n' + chalk.dim('  │ ')) + '\n');
+                        process.stdout.write(chalk.dim(lines.join('\n')) + '\n');
                     }
                     outputs.push(`$ ${preview}\n${output}`);
                 }
@@ -361,7 +406,7 @@ class ChatBot {
             await this.messageHandler.send(`[Command Results]\n${outputs.join('\n')}`, false);
             let full = '';
             await this.messageHandler.stream((chunk) => { full += chunk; });
-            if (full.trim()) process.stdout.write(chalk.dim('┃ ') + renderMarkdown(full.trim()).replace(/\n/g, '\n' + chalk.dim('┃ ')) + '\n');
+            if (full.trim()) process.stdout.write(renderMarkdown(full.trim()) + '\n');
             this._printUsage();
             console.log('');
 
@@ -380,15 +425,22 @@ class ChatBot {
         if (parts.length >= 3) {
             await this._switchProvider(parts[1], parts.slice(2).join(' '));
         } else if (parts.length === 2) {
-            // Just change model name on current provider
-            this.messageHandler.model.model = parts[1];
-            console.log(chalk.green(`✓ Model: ${parts[1]}\n`));
+            const modelArg = parts[1];
+            if (modelArg === 'claude-web') {
+                await this._switchProvider('claude-web', '');
+            } else if (modelArg === 'gemini-web') {
+                await this._switchProvider('gemini-web', '');
+            } else {
+                // Just change model name on current provider
+                this.messageHandler.model.model = modelArg;
+                console.log(chalk.green(`✓ Model: ${modelArg}\n`));
+            }
         } else {
             const cur = this.messageHandler.model;
             const provider = cur.constructor.name.replace('Adapter', '').toLowerCase();
             console.log(chalk.cyan(`Provider: ${provider}  Model: ${cur.model}`));
             console.log(chalk.dim('Usage: /model list | /model <name> | /model <provider> <model>'));
-            console.log(chalk.dim('Providers: ollama, openrouter, gemini, custom\n'));
+            console.log(chalk.dim('Providers: ollama, openrouter, gemini, custom, gemini-web, claude-web\n'));
         }
     }
 
@@ -411,6 +463,16 @@ class ChatBot {
         const prevMessages = this.messageHandler.model.messages.slice(); // keep history
         let newModel;
         switch (provider) {
+            case 'claude-web': {
+                const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
+                newModel = new ClaudeCookiesAdapter();
+                break;
+            }
+            case 'gemini-web': {
+                const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
+                newModel = new GeminiCookiesAdapter();
+                break;
+            }
             case 'ollama': {
                 const { OllamaAdapter } = require('./models/ollama');
                 newModel = new OllamaAdapter(modelName, process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
@@ -432,17 +494,25 @@ class ChatBot {
                 break;
             }
             default:
-                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom\n`));
+                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom, gemini-web, claude-web\n`));
                 return;
         }
-        newModel.messages = prevMessages;
+        await newModel.init();
+        // Don't carry over old history — web adapters maintain server-side context
+        const isWebAdapter = ['claude-web', 'gemini-web'].includes(provider);
+        newModel.messages = isWebAdapter ? [] : prevMessages;
         if (this.agentMode && this.tools) newModel.tools = this.tools.getToolSchemas();
+        // Update agentPrompt for web adapters
+        if (this.agentMode && isWebAdapter) {
+            this.messageHandler.agentPrompt = AgentPrompt.getCompactPrompt(this.tools);
+        }
         this.messageHandler.model = newModel;
-        console.log(chalk.green(`✓ Switched to ${provider}/${modelName}\n`));
+        this.model = newModel;
+        console.log(chalk.green(`✓ Switched to ${provider}${modelName ? '/' + modelName : ''}\n`));
     }
 
     async getLastResponse() {
-        const messages = this.model.messages.filter(m => m.role === 'assistant');
+        const messages = this.messageHandler.model.messages.filter(m => m.role === 'assistant');
         if (messages.length === 0) return null;
         return messages[messages.length - 1].content;
     }
@@ -450,6 +520,15 @@ class ChatBot {
     _lastMentionedFile(text) {
         const m = text?.match(/\b([\w./][\w./]*\.\w+)\b/);
         return m?.[1] || null;
+    }
+
+    _getCompletions() {
+        const models = ['/model claude-web', '/model gemini-web'];
+        const ollamaModel = process.env.OLLAMA_MODEL;
+        if (ollamaModel) models.push(`/model ollama ${ollamaModel}`);
+        const orModel = process.env.OPENROUTER_MODEL;
+        if (orModel) models.push(`/model openrouter ${orModel}`);
+        return ['exit', 'clear', ...models];
     }
 
     cleanup() {

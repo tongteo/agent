@@ -1,30 +1,33 @@
 class AgentPrompt {
     static getCompactPrompt(toolRegistry) {
         // Short prompt for models with limited context tolerance (e.g. Gemini web)
-        const priority = ['read_file', 'write_file', 'str_replace', 'list_dir', 'find_files', 'execute', 'run_command', 'grep', 'append', 'read_lines', 'delete_file', 'use_subagent'];
+        const priority = ['read_file', 'write_file', 'str_replace', 'list_dir', 'find_files', 'bash', 'execute', 'grep', 'append', 'read_lines', 'delete_file', 'use_subagent'];
         const allTools = toolRegistry.getToolList().split('\n');
         const tools = [
             ...priority.map(p => allTools.find(t => t.startsWith(`- ${p}:`))).filter(Boolean),
             ...allTools.filter(t => !priority.some(p => t.startsWith(`- ${p}:`)))
         ].slice(0, 14).join('\n');
-        return `You are a helpful coding assistant running inside a terminal application on the user's computer. You have been given a set of actions you can perform to help complete tasks.
+        return `You are a terminal agent running on the user's local machine with full filesystem and shell access via the tools below. You are NOT a web chatbot — you have real, working tool integrations. Always use a tool to act; only reply in plain text when no action is needed.
 
-When you want to perform an action, write it in this format (no markdown, no backticks):
-<tool>action_name</tool>
-<params>{"key":"value"}</params>
-
-Actions available:
+Tools available:
 ${tools}
 
-Example of listing files:
+Response format — emit exactly this, no markdown fences, no prose before the tag:
+<tool>NAME</tool>
+<params>{"key":"value"}</params>
+
+Examples:
+User: list files
 <tool>list_dir</tool>
-<params>{"path": "."}</params>
+<params>{"path":"."}</params>
 
-Example of compiling a C file:
-<tool>execute</tool>
-<params>{"command": "gcc main.c -o main && ./main"}</params>
+User: read main.c
+<tool>read_file</tool>
+<params>{"path":"main.c"}</params>
 
-Please perform actions directly rather than describing them. After finishing, give a brief summary.`;
+User: run tests
+<tool>bash</tool>
+<params>{"command":"npm test"}</params>`;
     }
 
     static getSystemPrompt(toolRegistry) {
@@ -103,32 +106,42 @@ class ToolParser {
                 // Try to parse JSON
                 let params;
                 try {
-                    params = JSON.parse(paramsStr);
+                    // Escape unescaped control characters inside JSON string values
+                    const sanitized = paramsStr.replace(
+                        /("(?:[^"\\]|\\.)*")/gs,
+                        (m) => m.replace(/[\x00-\x1f]/g, c => {
+                            const map = {'\n':'\\n','\r':'\\r','\t':'\\t'};
+                            return map[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`;
+                        })
+                    );
+                    params = JSON.parse(sanitized);
                 } catch (e) {
-                    // If JSON parse fails, try to extract manually for simple cases
-                    console.error(`JSON parse failed, attempting manual extraction: ${e.message}`);
-                    
-                    // Extract path
+                    // Extract path + content manually as last resort
                     const pathMatch = paramsStr.match(/"path"\s*:\s*"([^"]+)"/);
                     // Extract content (everything between "content": " and the last ")
                     const contentMatch = paramsStr.match(/"content"\s*:\s*"([\s\S]*?)"\s*}?\s*$/);
                     
                     if (pathMatch && contentMatch) {
                         let content = contentMatch[1];
-                        // Unescape JSON escape sequences
                         content = content
                             .replace(/\\n/g, '\n')
                             .replace(/\\t/g, '\t')
                             .replace(/\\r/g, '\r')
                             .replace(/\\"/g, '"')
                             .replace(/\\\\/g, '\\');
-                        
-                        params = {
-                            path: pathMatch[1],
-                            content: content
-                        };
+                        params = { path: pathMatch[1], content };
                     } else {
-                        throw new Error('Could not extract params');
+                        // Generic fallback: extract all "key":"value" pairs
+                        const pairs = {};
+                        const kvRegex = /"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+                        let kv;
+                        while ((kv = kvRegex.exec(paramsStr)) !== null) pairs[kv[1]] = kv[2].replace(/\\n/g,'\n').replace(/\\t/g,'\t').replace(/\\"/g,'"').replace(/\\\\/g,'\\');
+                        // Also extract numeric/boolean values
+                        const numRegex = /"(\w+)"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)/g;
+                        let nv;
+                        while ((nv = numRegex.exec(paramsStr)) !== null) if (!(nv[1] in pairs)) try { pairs[nv[1]] = JSON.parse(nv[2]); } catch {}
+                        if (Object.keys(pairs).length) params = pairs;
+                        else throw new Error('Could not extract params');
                     }
                 }
                 
@@ -146,24 +159,64 @@ class ToolParser {
 }
 
 class IntentParser {
+    // Parse user's direct input into a tool call (for gemini-web pre-flight dispatch)
+    static parseUserInput(text) {
+        const t = text.trim();
+
+        // "run fermat" / "run fermat 15" / "run ./fermat 15" / "execute fermat"
+        const runMatch = t.match(/^(?:run|exec(?:ute)?)\s+[`'"]?(\.\/)?(\S+?)(?:\s+(\S+(?:\s+\S+)*))?[`'"]?$/i);
+        if (runMatch) {
+            const name = runMatch[2];
+            if (!name.startsWith('-')) {
+                const bin = `./${name.replace(/^\.\//, '')}`;
+                const args = runMatch[3] ? runMatch[3].trim() : '';
+                const cmd = args ? `echo '${args}' | ${bin}` : bin;
+                return { tool: 'execute', params: { command: cmd } };
+            }
+        }
+
+        // "compile fermat.c" / "gcc fermat.c"
+        const compileMatch = t.match(/^(?:compile|gcc|g\+\+|clang)\s+[`'"]?([\w./]+\.[ch](?:pp)?)[`'"]?/i);
+        if (compileMatch) {
+            const file = compileMatch[1];
+            const out = file.replace(/\.[^.]+$/, '');
+            return { tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } };
+        }
+
+        // "ls" / "list files"
+        if (/^(?:ls|list(?:\s+files)?)\s*(.*)$/.test(t)) {
+            const dir = t.match(/\s+([\w./~-]+)$/)?.[1] || '.';
+            return { tool: 'list_dir', params: { path: dir } };
+        }
+
+        return null;
+    }
+
     // Parse natural language response into tool calls when model doesn't use XML format
     static parse(text, context = {}) {
         const t = text.toLowerCase();
         const calls = [];
 
-        // Don't parse intent from long explanatory responses (model is explaining, not acting)
-        if (text.length > 500) return calls;
+        // Don't parse intent from very long explanatory responses
+        if (text.length > 2000) return calls;
 
         // compile/build/run a file
-        const compileMatch = text.match(/(?:compile|build|gcc|g\+\+|run)\s+[`'"]?([\w./]+\.[ch](?:pp)?)[`'"]?/i)
+        const compileMatch = text.match(/(?:compile|build|gcc|g\+\+)\s+[`'"]?([\w./]+\.[ch](?:pp)?)[`'"]?/i)
             || (t.includes('compil') || t.includes('build') || t.includes('gcc')) && context.lastFile?.match(/\.[ch](pp)?$/) && [null, context.lastFile];
         if (compileMatch?.[1]) {
             const file = compileMatch[1];
             const out = file.replace(/\.[^.]+$/, '');
-            calls.push({ tool: 'execute', params: { command: `gcc "${file}" -o "${out}" && "./${out}"` } });
+            calls.push({ tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } });
             return calls;
         }
 
+        // run/execute a binary or command (./fermat, run fermat, execute fermat, etc.)
+        const runMatch = text.match(/(?:run(?:ning)?|execut(?:e|ing)|launch)\s+(?:the\s+(?:program|executable|binary|command)\s+)?[`'"]?(\.\/[\w.-]+|[\w-]+(?:\.exe)?)[`'"]?/i);
+        if (runMatch?.[1]) {
+            const cmd = runMatch[1].startsWith('./') ? runMatch[1] : `./${runMatch[1]}`;
+            calls.push({ tool: 'execute', params: { command: cmd } });
+            return calls;
+        }
         // read/show/display/open file
         const readMatch = text.match(/(?:read|show|display|open|view|cat)\s+[`'"]?([\w./]+\.\w+)[`'"]?/i)
             || (t.includes('read') || t.includes('show') || t.includes('display')) && context.lastFile && [null, context.lastFile];

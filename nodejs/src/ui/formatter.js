@@ -70,6 +70,30 @@ function formatMath(text) {
         .replace(/(\d+)\s*\/\s*(\d+)\s*=\s*(\d+)/g, '$1 ÷ $2 = $3');
 }
 
+function renderLatex(expr) {
+    return expr
+        .replace(/\\boxed\{([^}]+)\}/g, '[ $1 ]')
+        .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
+        .replace(/\\sqrt\s+(\S+)/g, '√$1')
+        .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
+        .replace(/\\times/g, '×')
+        .replace(/\\cdot/g, '·')
+        .replace(/\\approx/g, '≈')
+        .replace(/\\neq/g, '≠')
+        .replace(/\\leq/g, '≤')
+        .replace(/\\geq/g, '≥')
+        .replace(/\^2/g, '²')
+        .replace(/\^3/g, '³')
+        .replace(/\^(\{[^}]+\}|\w)/g, '^$1')
+        .replace(/[{}\\]/g, '');
+}
+
+function renderTableRow(rest) {
+    if (/^[-|\s:]+$/.test(rest)) return '';
+    const cells = rest.split('|').map(c => c.trim()).filter((c, i, a) => !(i === a.length - 1 && c === ''));
+    return chalk.dim('  ') + cells.map(c => c.padEnd(14)).join(chalk.dim(' │ '));
+}
+
 // Renders a complete markdown response: code blocks highlighted, bold/inline-code styled
 function renderMarkdown(text) {
     const lines = text.split('\n');
@@ -110,7 +134,10 @@ function renderMarkdown(text) {
             .replace(/\*\*(.+?)\*\*/g, (_, t) => chalk.bold(t))
             .replace(/`([^`]+)`/g, (_, t) => chalk.cyan(t))
             .replace(/^(#{1,3})\s+(.+)/, (_, h, t) => chalk.bold.underline(t))
-            .replace(/^\|\s*(.+)/, (_, t) => chalk.dim('│ ') + t);
+            .replace(/\$\$([^$]+)\$\$/g, (_, t) => chalk.yellow(renderLatex(t)))
+            .replace(/\$([^$\n]+)\$/g, (_, t) => chalk.yellow(renderLatex(t)))
+            .replace(/^---+$/, chalk.dim('─'.repeat(40)))
+            .replace(/^\|\s*(.+)/, (_, t) => renderTableRow(t));
         out.push(formatted);
     }
 

@@ -1,43 +1,19 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const readline = require('readline');
-const fs = require('fs');
 
-const BRIDGES_DIR = path.join(__dirname, '..', 'bridges');
-const SCRIPT = path.join(BRIDGES_DIR, 'gemini_bridge.py');
-const SESSION_FILE = path.join(BRIDGES_DIR, '.gemini_session.json');
+const SCRIPT = path.join(__dirname, '..', 'bridges', 'claude_bridge.py');
 
-class GeminiCookiesAdapter {
+class ClaudeCookiesAdapter {
     constructor() {
-        this.model = 'gemini-web';
+        this.model = 'claude-web';
         this.messages = [];
         this.lastUsage = null;
         this._proc = null;
         this._rl = null;
-        this._pending = null; // { resolve, reject }
+        this._pending = null;
         this._sentSystem = false;
-        this._loadSession();
-    }
-
-    _loadSession() {
-        try {
-            const s = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-            this._convId = s.conv_id || '';
-            this._respId = s.resp_id || '';
-            this._choiceId = s.choice_id || '';
-        } catch {
-            this._convId = '';
-            this._respId = '';
-            this._choiceId = '';
-        }
-    }
-
-    _saveSession() {
-        fs.writeFileSync(SESSION_FILE, JSON.stringify({
-            conv_id: this._convId,
-            resp_id: this._respId,
-            choice_id: this._choiceId
-        }));
+        this._convId = '';
     }
 
     async init() {
@@ -105,31 +81,26 @@ class GeminiCookiesAdapter {
         if (!userMsg) return;
 
         const systemMsg = this.messages.find(m => m.role === 'system');
-        const isNewSession = !this._convId;
-        const isFirstNodeTurn = !this._sentSystem;
+        const isFirstTurn = !this._sentSystem;
 
-        // Build conversation history (exclude system, exclude last user msg)
         const history = this.messages
             .filter(m => m.role !== 'system' && m !== userMsg)
             .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
             .join('\n');
 
         let text = userMsg.content;
-        if (systemMsg && (isNewSession || isFirstNodeTurn)) {
+        const isNewConv = !this._convId;
+
+        if (systemMsg && (isNewConv || isFirstTurn)) {
             const historyBlock = history ? `\n\n[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n` : '';
-            text = `[INSTRUCTIONS]\n${systemMsg.content}\n[END]${historyBlock}\n\nUser: ${text}`;
+            text = `${systemMsg.content}${historyBlock}\n\n${text}`;
             this._sentSystem = true;
-        } else if (history) {
-            text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\nUser: ${text}`;
+        } else if (history && isNewConv) {
+            text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\n${text}`;
         }
 
-        const result = await this._send({ text, conv_id: '', resp_id: '', choice_id: '' });
-
+        const result = await this._send({ text, new_conv: isNewConv });
         this._convId = result.conv_id;
-        this._respId = result.resp_id;
-        this._choiceId = result.choice_id;
-        this._saveSession();
-
         this.messages.push({ role: 'assistant', content: result.text });
         yield result.text;
     }
@@ -137,10 +108,7 @@ class GeminiCookiesAdapter {
     reset() {
         this.messages = [];
         this._convId = '';
-        this._respId = '';
-        this._choiceId = '';
         this._sentSystem = false;
-        try { fs.unlinkSync(SESSION_FILE); } catch {}
     }
 
     cleanup() {
@@ -149,4 +117,4 @@ class GeminiCookiesAdapter {
     }
 }
 
-module.exports = { GeminiCookiesAdapter };
+module.exports = { ClaudeCookiesAdapter };

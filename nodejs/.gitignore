@@ -4,3 +4,5 @@ node_modules/
 math_answer.txt
 .env
 .env.*
+src/bridges/*_cookies.json
+src/bridges/.gemini_session.json

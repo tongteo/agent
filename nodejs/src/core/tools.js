@@ -438,11 +438,23 @@ class ToolRegistry {
 
         // Advanced debugging tools
         this.register('bash', async ({ command, working_dir }) => {
+            // Handle export commands by persisting to process.env
+            const exportMatch = command.trim().match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+            if (exportMatch) {
+                const key = exportMatch[1];
+                // Strip inline comments and surrounding quotes
+                let val = exportMatch[2].replace(/\s*#.*$/, '').trim();
+                val = val.replace(/^(['"])(.*)\1$/, '$2');
+                process.env[key] = val;
+                return `Exported: ${key}=${val}`;
+            }
             try {
                 const result = execSync(command, {
+                    shell: '/bin/sh',
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
+                    env: process.env,
                     cwd: working_dir || this.session?.workingDir || process.cwd()
                 });
                 return result || '(no output)';

@@ -7,12 +7,15 @@ const { ToolRegistry } = require('./src/core/tools');
 const { AgentPrompt, ToolParser, IntentParser } = require('./src/core/agent');
 const { SessionManager } = require('./src/core/session');
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function runAgentTurn(adapter, tools, userMsg, turnNum) {
     console.log(`\n=== Turn ${turnNum} ===`);
     console.log(`👤 ${userMsg}`);
     adapter.messages.push({ role: 'user', content: userMsg });
 
     for (let iter = 0; iter < 4; iter++) {
+        if (iter > 0) await sleep(3000);
         let response = '';
         for await (const chunk of adapter.streamMessage()) response += chunk;
 
@@ -30,7 +33,6 @@ async function runAgentTurn(adapter, tools, userMsg, turnNum) {
             const result = await tools.execute(tool, params);
             const preview = result.substring(0, 400);
             console.log(`  ✓ ${preview}`);
-            adapter.messages.push({ role: 'assistant', content: response });
             adapter.messages.push({ role: 'user', content: `Tool result:\n${result}` });
         }
     }
@@ -51,6 +53,7 @@ async function runAgentTurn(adapter, tools, userMsg, turnNum) {
     ];
 
     for (let i = 0; i < turns.length; i++) {
+        if (i > 0) await sleep(5000);
         await runAgentTurn(adapter, tools, turns[i], i + 1);
     }
 
