@@ -1,3 +1,13 @@
+const os = require('os');
+
+function getOSContext() {
+    const platform = os.platform();
+    // TODO: implement Windows-specific shell/path adjustments (win32)
+    if (platform === 'darwin') return 'OS: macOS. Use macOS-compatible shell commands (bash/zsh, no apt/yum).';
+    if (platform === 'linux') return 'OS: Linux. Use Linux shell commands.';
+    return `OS: ${platform}.`;
+}
+
 class AgentPrompt {
     static getCompactPrompt(toolRegistry) {
         // Short prompt for models with limited context tolerance (e.g. Gemini web)
@@ -7,7 +17,8 @@ class AgentPrompt {
             ...priority.map(p => allTools.find(t => t.startsWith(`- ${p}:`))).filter(Boolean),
             ...allTools.filter(t => !priority.some(p => t.startsWith(`- ${p}:`)))
         ].slice(0, 14).join('\n');
-        return `You are a terminal agent running on the user's local machine with full filesystem and shell access via the tools below. You are NOT a web chatbot — you have real, working tool integrations. Always use a tool to act; only reply in plain text when no action is needed.
+        return `${getOSContext()}
+You are a terminal agent running on the user's local machine with full filesystem and shell access via the tools below. You are NOT a web chatbot — you have real, working tool integrations. Always use a tool to act; only reply in plain text when no action is needed.
 
 Tools available:
 ${tools}
@@ -31,7 +42,8 @@ User: run tests
     }
 
     static getSystemPrompt(toolRegistry) {
-        return `You are an AI agent with access to tools. You MUST use tools to complete tasks.
+        return `${getOSContext()}
+You are an AI agent with access to tools. You MUST use tools to complete tasks.
 
 CRITICAL RULES:
 1. For file operations - ALWAYS use tools
