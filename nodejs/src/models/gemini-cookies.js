@@ -22,9 +22,10 @@ class GeminiCookiesAdapter {
     _loadSession() {
         try {
             const s = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-            this._convId = s.conv_id || '';
-            this._respId = s.resp_id || '';
-            this._choiceId = s.choice_id || '';
+            // Don't restore old conv_id — Gemini conversations expire and cause error 1099
+            this._convId = '';
+            this._respId = '';
+            this._choiceId = '';
         } catch {
             this._convId = '';
             this._respId = '';
@@ -116,14 +117,16 @@ class GeminiCookiesAdapter {
 
         let text = userMsg.content;
         if (systemMsg && (isNewSession || isFirstNodeTurn)) {
-            const historyBlock = history ? `\n\n[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n` : '';
+            // const historyBlock = history ? `\n\n[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n` : '';
+            const historyBlock = '';
             text = `[INSTRUCTIONS]\n${systemMsg.content}\n[END]${historyBlock}\n\nUser: ${text}`;
             this._sentSystem = true;
-        } else if (history) {
-            text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\nUser: ${text}`;
+        } else if (systemMsg && history) {
+            // text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\nUser: ${text}`;
+            text = `User: ${text}`;
         }
 
-        const result = await this._send({ text, conv_id: '', resp_id: '', choice_id: '' });
+        const result = await this._send({ text, conv_id: this._convId, resp_id: this._respId, choice_id: this._choiceId });
 
         this._convId = result.conv_id;
         this._respId = result.resp_id;

@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 class OllamaAdapter {
-    constructor(model = 'qwen2.5:3b', baseUrl = 'http://localhost:11434') {
+    constructor(model = 'llama3.2', baseUrl = 'http://localhost:11434') {
         this.model = model;
         this.baseUrl = baseUrl;
         this.messages = [];

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Persistent bridge: reads JSON lines from stdin, writes JSON lines to stdout."""
-import json, re, sys, uuid, time, requests
+import json, re, sys, uuid, time, requests, signal
 from pathlib import Path
+
+# Ignore SIGINT in bridge process (parent handles it)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 COOKIES_FILE = Path(__file__).parent / "gemini_cookies.json"
 APP_URL = "https://gemini.google.com/app"
@@ -130,6 +133,12 @@ def do_request_with_retry(session, snlm0e, bl, sid, text, metadata, retries=5):
                     sys.stderr.flush()
                     time.sleep(wait)
                     continue
+            if "1099" in err and attempt == 0:
+                # Invalid/expired conversation — retry as new conversation
+                sys.stderr.write("[bridge] conv state invalid (1099), retrying as new conversation...\n")
+                sys.stderr.flush()
+                metadata = ["", "", "", None, None, None, None, None, None, ""]
+                continue
             raise
     raise RuntimeError("Max retries exceeded")
 

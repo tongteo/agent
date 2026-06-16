@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Persistent bridge for Claude.ai web: reads JSON lines from stdin, writes JSON lines to stdout."""
-import json, sys, uuid, time, requests
+import json, sys, uuid, time, requests, signal
 from pathlib import Path
+
+# Ignore SIGINT in bridge process (parent handles it)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 COOKIES_FILE = Path(__file__).parent / "claude_cookies.json"
 BASE_URL = "https://claude.ai"

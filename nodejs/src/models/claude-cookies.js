@@ -92,11 +92,13 @@ class ClaudeCookiesAdapter {
         const isNewConv = !this._convId;
 
         if (systemMsg && (isNewConv || isFirstTurn)) {
-            const historyBlock = history ? `\n\n[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n` : '';
+            // const historyBlock = history ? `\n\n[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n` : '';
+            const historyBlock = '';
             text = `${systemMsg.content}${historyBlock}\n\n${text}`;
             this._sentSystem = true;
         } else if (history && isNewConv) {
-            text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\n${text}`;
+            // text = `[CONVERSATION SO FAR]\n${history}\n[END HISTORY]\n\n${text}`;
+            // Skip history, just use text
         }
 
         const result = await this._send({ text, new_conv: isNewConv });

@@ -8,11 +8,9 @@ class MessageHandler {
     }
 
     getSystemContext() {
+        if (!this.agentPrompt) return null;
         const cwd = this.session.workingDir || process.cwd();
-        if (this.agentPrompt) {
-            return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n\n${this.agentPrompt}`;
-        }
-        return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n[INSTRUCTION: Format shell commands in bash code blocks. Keep responses concise and technical.]`;
+        return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n\n${this.agentPrompt}`;
     }
 
     async send(message, includeContext = true) {

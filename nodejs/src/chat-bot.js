@@ -216,12 +216,11 @@ class ChatBot {
                 this._printUsage();
                 console.log('');
                 
-                // Agent mode: handle tool calls
+                // Agent mode: handle tool calls and commands
                 if (this.agentMode) {
                     await this.handleToolCalls();
+                    await this.handleCommands();
                 }
-                
-                await this.handleCommands();
             }
         }
     }
@@ -303,6 +302,11 @@ class ChatBot {
             let si = 0;
             let full = '';
             let aborted = false;
+            const streamTimeout = setTimeout(() => {
+                aborted = true;
+                this.model.abort?.();
+                console.log(chalk.yellow('\n⚠️  Stream timeout (60s)\n'));
+            }, 60000);
             const sigintHandler = () => { aborted = true; this.model.abort?.(); };
             process.removeListener('SIGINT', this.prompt._sigintDefault);
             process.once('SIGINT', sigintHandler);
@@ -310,6 +314,7 @@ class ChatBot {
             try {
                 await this.messageHandler.stream((chunk) => { full += chunk; });
             } finally {
+                clearTimeout(streamTimeout);
                 clearInterval(interval);
                 process.removeListener('SIGINT', sigintHandler);
                 process.addListener('SIGINT', this.prompt._sigintDefault);
