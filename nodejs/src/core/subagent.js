@@ -35,16 +35,27 @@ class SubagentManager {
                 fullQuery = `Context: ${relevant_context}\n\nTask: ${fullQuery}`;
             }
             
-            const response = await bot.chatOnce(fullQuery);
+            let response = '';
+            let taskError = null;
+            
+            try {
+                response = await bot.chatOnce(fullQuery);
+            } catch (err) {
+                // Capture error but don't fail if we got partial response
+                taskError = err;
+                response = err.message || 'Subagent execution failed';
+            }
             
             this.activeSubagents.delete(subagentId);
             
+            // Return success if we got a response, even if there was a cleanup error
             return {
                 subagent_id: subagentId,
                 agent_name: agent_name || 'default',
                 query: query || task,
                 response,
-                success: true
+                success: !taskError || response.length > 0,
+                ...(taskError && { warning: taskError.message })
             };
         } catch (error) {
             this.activeSubagents.delete(subagentId);
