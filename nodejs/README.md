@@ -17,6 +17,23 @@ node bin/openrouter          # agent mode
 node bin/openrouter --chat   # chat mode
 ```
 
+### Global Command (Optional)
+
+Chạy `agent` từ bất kỳ thư mục nào:
+
+```bash
+# Tạo symlink
+sudo ln -s $(pwd)/bin/openrouter /usr/local/bin/agent
+
+# Hoặc thêm alias vào ~/.bashrc hoặc ~/.zshrc
+echo "alias agent='node $(pwd)/bin/openrouter'" >> ~/.bashrc
+source ~/.bashrc
+
+# Sử dụng
+agent                        # agent mode
+agent --chat                 # chat mode
+```
+
 ## Commands
 
 - `exit` - Quit
