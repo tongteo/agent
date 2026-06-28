@@ -14,7 +14,7 @@ class SubagentManager {
     }
 
     async runSubagent(config, index) {
-        const { query, agent_name, relevant_context } = config;
+        const { query, task, agent_name, relevant_context } = config;
         const subagentId = `subagent_${index}_${Date.now()}`;
         
         try {
@@ -26,9 +26,13 @@ class SubagentManager {
             
             this.activeSubagents.set(subagentId, bot);
             
-            let fullQuery = query;
+            // Accept both 'query' and 'task' field names
+            let fullQuery = query || task || '';
+            if (!fullQuery) {
+                throw new Error('Missing query or task field');
+            }
             if (relevant_context) {
-                fullQuery = `Context: ${relevant_context}\n\nTask: ${query}`;
+                fullQuery = `Context: ${relevant_context}\n\nTask: ${fullQuery}`;
             }
             
             const response = await bot.chatOnce(fullQuery);
@@ -38,7 +42,7 @@ class SubagentManager {
             return {
                 subagent_id: subagentId,
                 agent_name: agent_name || 'default',
-                query,
+                query: query || task,
                 response,
                 success: true
             };
@@ -47,7 +51,7 @@ class SubagentManager {
             return {
                 subagent_id: subagentId,
                 agent_name: agent_name || 'default',
-                query,
+                query: query || task || '',
                 error: error.message,
                 success: false
             };
