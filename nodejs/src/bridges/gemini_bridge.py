@@ -22,6 +22,9 @@ HEADERS_BASE = {
 
 
 def load_session():
+    if not COOKIES_FILE.exists():
+        raise FileNotFoundError(f"Cookie file not found: {COOKIES_FILE}\n"
+                              f"Please create {COOKIES_FILE.name} with your Gemini cookies.")
     cookies = {c["name"]: c["value"] for c in json.loads(COOKIES_FILE.read_text())}
     s = requests.Session()
     s.cookies.update(cookies)

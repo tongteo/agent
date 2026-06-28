@@ -15,7 +15,7 @@ class MessageHandler {
 
     async send(message, includeContext = true) {
         const systemPrompt = includeContext ? this.getSystemContext() : null;
-        if (systemPrompt) {
+        if (systemPrompt && message !== null) { // Chỉ update system khi có user message mới
             const sysIdx = this.model.messages.findIndex(m => m.role === 'system');
             if (sysIdx === -1) this.model.messages.unshift({ role: 'system', content: systemPrompt });
             else this.model.messages[sysIdx].content = systemPrompt;

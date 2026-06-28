@@ -14,6 +14,14 @@ try {
 class CommandExecutor {
     constructor(session) {
         this.session = session;
+        this.shell = this.getShell();
+    }
+
+    getShell() {
+        if (process.platform === 'win32') {
+            return process.env.ComSpec || 'cmd.exe';
+        }
+        return '/bin/bash';
     }
 
     execute(command) {
@@ -30,7 +38,7 @@ class CommandExecutor {
                 cwd: this.session.workingDir,
                 env: { ...this.session.envVars, TERM: 'xterm-256color' },
                 timeout: isPackageManager ? 120000 : 30000,
-                shell: '/bin/bash',
+                shell: this.shell,
                 maxBuffer: 10 * 1024 * 1024
             });
             return output || '(command completed successfully)';
@@ -79,7 +87,8 @@ class CommandExecutor {
                 promptManager.close();
             }
 
-            const shell = pty.spawn('/bin/bash', ['-c', command], {
+            const shellArgs = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+            const shell = pty.spawn(this.shell, shellArgs, {
                 name: 'xterm-color',
                 cols: process.stdout.columns || 80,
                 rows: process.stdout.rows || 24,

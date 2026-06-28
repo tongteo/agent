@@ -4,6 +4,13 @@ const readline = require('readline');
 
 const SCRIPT = path.join(__dirname, '..', 'bridges', 'claude_bridge.py');
 
+function getPythonCommand() {
+    if (process.platform === 'win32') {
+        return 'py';
+    }
+    return 'python3';
+}
+
 class ClaudeCookiesAdapter {
     constructor() {
         this.model = 'claude-web';
@@ -23,7 +30,7 @@ class ClaudeCookiesAdapter {
     _startBridge() {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('Bridge init timeout')), 30000);
-            this._proc = spawn('python3', [SCRIPT]);
+            this._proc = spawn(getPythonCommand(), [SCRIPT]);
             this._proc.on('error', e => { clearTimeout(timer); reject(e); });
             this._proc.stdin.on('error', () => {}); // suppress EPIPE
             this._proc.stderr.on('data', d => {

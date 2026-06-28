@@ -35,7 +35,25 @@ class ChatBot {
         const ollamaModel = process.env.OLLAMA_MODEL;
         const geminiCookies = process.env.GEMINI_COOKIES;
         const claudeCookies = process.env.CLAUDE_COOKIES;
-        if (claudeCookies) {
+        const unlimitedKey = process.env.UNLIMITED_API_KEY;
+        const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+        if (unlimitedKey) {
+            const { UnlimitedAdapter } = require('./models/unlimited');
+            const unlimitedModel = process.env.UNLIMITED_MODEL || 'gateway-gpt-5';
+            const unlimitedBase = process.env.UNLIMITED_BASE_URL || 'https://unlimited.surf';
+            this.model = new UnlimitedAdapter(unlimitedKey, unlimitedModel, unlimitedBase);
+            if (this.agentMode && this.tools) {
+                this.model.tools = this.tools.getToolSchemas();
+            }
+        } else if (anthropicKey) {
+            const { AnthropicAdapter } = require('./models/anthropic');
+            const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7-20260101';
+            const anthropicBase = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+            this.model = new AnthropicAdapter(anthropicKey, anthropicModel, anthropicBase);
+            if (this.agentMode && this.tools) {
+                this.model.tools = this.tools.getToolSchemas();
+            }
+        } else if (claudeCookies) {
             const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
             this.model = new ClaudeCookiesAdapter();
         } else if (geminiCookies) {
@@ -209,7 +227,7 @@ class ChatBot {
                     continue;
                 }
 
-                const hasToolCall = full.includes('<tool>') || full.includes('&lt;tool&gt;') || full.includes('<longcat_tool_call>');
+                const hasToolCall = full.includes('<tool>') || full.includes('&lt;tool&gt;') || full.includes('<longcat_tool_call>') || full.includes('TOOL_CALL:') || this.model.pendingToolCalls?.length > 0;
                 if (full.trim() && !hasToolCall) {
                     process.stdout.write(renderMarkdown(full.trim()) + '\n');
                 }
@@ -302,11 +320,12 @@ class ChatBot {
             let si = 0;
             let full = '';
             let aborted = false;
+            const STREAM_TIMEOUT = 300000; // 5 minutes
             const streamTimeout = setTimeout(() => {
                 aborted = true;
                 this.model.abort?.();
-                console.log(chalk.yellow('\n⚠️  Stream timeout (60s)\n'));
-            }, 60000);
+                console.log(chalk.yellow(`\n⚠️  Stream timeout (${STREAM_TIMEOUT / 1000}s)\n`));
+            }, STREAM_TIMEOUT);
             const sigintHandler = () => { aborted = true; this.model.abort?.(); };
             process.removeListener('SIGINT', this.prompt._sigintDefault);
             process.once('SIGINT', sigintHandler);
@@ -498,8 +517,15 @@ class ChatBot {
                 newModel = new CustomAdapter(process.env.CUSTOM_API_KEY || this.apiKey, modelName, process.env.CUSTOM_API_BASE);
                 break;
             }
+            case 'anthropic': {
+                const { AnthropicAdapter } = require('./models/anthropic');
+                const key = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+                const base = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+                newModel = new AnthropicAdapter(key, modelName || process.env.ANTHROPIC_MODEL || 'claude-opus-4-7-20260101', base);
+                break;
+            }
             default:
-                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom, gemini-web, claude-web\n`));
+                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom, gemini-web, claude-web, anthropic\n`));
                 return;
         }
         await newModel.init();

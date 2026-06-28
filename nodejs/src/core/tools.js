@@ -4,6 +4,65 @@ const { execSync, execFileSync } = require('child_process');
 const { LSPClient } = require('./lsp');
 const { DiffFormatter } = require('../ui/diff');
 
+const IS_WINDOWS = process.platform === 'win32';
+
+// Neutralize prompt-injection payloads that may appear in tool output
+// (e.g. file contents, shell stdout, web page text). We HTML-escape any tag
+// that could be mistaken for a trusted system/instruction channel, and break
+// up [SYSTEM: ...] style markers with a zero-width space so they no longer
+// match the model's expected runtime-context pattern. This is a defense in
+// depth — the system prompt also instructs the model to treat tool output as
+// data only.
+const INJECTION_TAG_RE = /<(\/?)(system_reminder|system|developer|admin|instruction|sudo|tool_result|past_tool_use|project_instructions)\b([^>]*)>/gi;
+function sanitizeToolOutput(text) {
+    if (text == null) return text;
+    if (typeof text !== 'string') {
+        try { text = String(text); } catch { return text; }
+    }
+    return text
+        .replace(INJECTION_TAG_RE, '&lt;$1$2$3&gt;')
+        .replace(/\[SYSTEM:/gi, '[SYSTEM\u200B:')
+        .replace(/\[\/?INST\]/gi, m => m.replace('[', '[\u200B'));
+}
+
+function commandExists(cmd) {
+    try {
+        const probe = IS_WINDOWS ? 'where' : 'which';
+        execFileSync(probe, [cmd], { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function resolvePython() {
+    if (IS_WINDOWS) {
+        if (commandExists('py')) return { cmd: 'py', prefixArgs: ['-3'] };
+        if (commandExists('python')) return { cmd: 'python', prefixArgs: [] };
+        return { cmd: 'python3', prefixArgs: [] };
+    }
+    return { cmd: commandExists('python3') ? 'python3' : 'python', prefixArgs: [] };
+}
+
+function quoteArg(arg) {
+    if (arg === '' || arg == null) return '""';
+    const s = String(arg);
+    if (IS_WINDOWS) {
+        if (/[\s"&|<>^()%!]/.test(s)) {
+            return '"' + s.replace(/"/g, '\\"') + '"';
+        }
+        return s;
+    }
+    if (/[^A-Za-z0-9_\-./=:]/.test(s)) {
+        return "'" + s.replace(/'/g, "'\\''") + "'";
+    }
+    return s;
+}
+
+function buildCmd(parts) {
+    return parts.map(quoteArg).join(' ');
+}
+
 class ToolRegistry {
     constructor(session) {
         this.tools = new Map();
@@ -122,26 +181,90 @@ class ToolRegistry {
         }, 'List directory. Params: {"path": "."}');
 
         this.register('grep', async ({ pattern, path: searchPath = '.' }) => {
+            let re;
             try {
-                const result = execFileSync('grep', ['-r', pattern, searchPath], {
-                    encoding: 'utf-8',
-                    maxBuffer: 1 * 1024 * 1024,
-                    timeout: 5000
-                });
-                return result || 'No matches found';
+                re = new RegExp(pattern);
             } catch (e) {
-                return e.stdout || 'No matches found';
+                return `Error: invalid regex pattern: ${e.message}`;
+            }
+            try {
+                const matches = [];
+                const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__']);
+                const deadline = Date.now() + 5000;
+                const maxBytes = 1 * 1024 * 1024;
+                let totalBytes = 0;
+
+                const walk = (dir) => {
+                    if (Date.now() > deadline || totalBytes >= maxBytes) return;
+                    let entries;
+                    try {
+                        entries = fs.readdirSync(dir, { withFileTypes: true });
+                    } catch { return; }
+                    for (const entry of entries) {
+                        if (Date.now() > deadline || totalBytes >= maxBytes) return;
+                        if (skip.has(entry.name)) continue;
+                        const full = path.join(dir, entry.name);
+                        if (entry.isDirectory()) {
+                            walk(full);
+                        } else if (entry.isFile()) {
+                            let content;
+                            try {
+                                content = fs.readFileSync(full, 'utf-8');
+                            } catch { continue; }
+                            const lines = content.split(/\r?\n/);
+                            for (let i = 0; i < lines.length; i++) {
+                                if (re.test(lines[i])) {
+                                    const line = `${full}:${i + 1}:${lines[i]}`;
+                                    matches.push(line);
+                                    totalBytes += line.length + 1;
+                                    if (totalBytes >= maxBytes) return;
+                                }
+                            }
+                        }
+                    }
+                };
+
+                const stat = fs.statSync(searchPath);
+                if (stat.isFile()) {
+                    const content = fs.readFileSync(searchPath, 'utf-8');
+                    content.split(/\r?\n/).forEach((l, i) => {
+                        if (re.test(l)) matches.push(`${searchPath}:${i + 1}:${l}`);
+                    });
+                } else {
+                    walk(searchPath);
+                }
+                return matches.length ? matches.join('\n') : 'No matches found';
+            } catch (e) {
+                return `Error: ${e.message}`;
             }
         }, 'Search in files. Params: {"pattern": "TODO", "path": "."}');
 
         this.register('find_files', async ({ pattern, path: searchPath = '.' }) => {
             try {
-                const result = execFileSync('find', [searchPath, '-name', pattern], {
-                    encoding: 'utf-8'
-                });
-                return result || 'No files found';
+                // Convert glob pattern to regex (supports *, ?, and literals)
+                const escapeRegex = (s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+                const reSrc = '^' + escapeRegex(pattern).replace(/\\\*/g, '.*').replace(/\\\?/g, '.') + '$';
+                const re = new RegExp(reSrc, IS_WINDOWS ? 'i' : '');
+                const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__']);
+                const results = [];
+
+                const walk = (dir) => {
+                    let entries;
+                    try {
+                        entries = fs.readdirSync(dir, { withFileTypes: true });
+                    } catch { return; }
+                    for (const entry of entries) {
+                        if (skip.has(entry.name)) continue;
+                        const full = path.join(dir, entry.name);
+                        if (re.test(entry.name)) results.push(full);
+                        if (entry.isDirectory()) walk(full);
+                    }
+                };
+
+                walk(searchPath);
+                return results.length ? results.join('\n') : 'No files found';
             } catch (e) {
-                return e.stdout || 'No files found';
+                return `Error: ${e.message}`;
             }
         }, 'Find files by name. Params: {"pattern": "*.js", "path": "."}');
 
@@ -382,75 +505,91 @@ class ToolRegistry {
 
         // Execute tool
         this.register('execute', async ({ file, command, args = '', stdin = '' }) => {
-            // If called with `command` param (shell command), delegate to bash tool
             if (command && !file) {
                 return this.tools.get('bash').fn({ command });
             }
             try {
                 if (!file) return 'Error: missing required param "file"';
-                const ext = file.split('.').pop();
+                const ext = file.split('.').pop().toLowerCase();
+                const exeSuffix = IS_WINDOWS ? '.exe' : '';
+                const runPrefix = IS_WINDOWS ? '' : './';
                 let cmd;
-                
-                // Detect language and build command
+
                 if (ext === 'py') {
-                    cmd = `python3 ${file} ${args}`;
+                    const py = resolvePython();
+                    cmd = buildCmd([py.cmd, ...py.prefixArgs, file]) + (args ? ' ' + args : '');
                 } else if (ext === 'js') {
-                    cmd = `node ${file} ${args}`;
+                    cmd = buildCmd(['node', file]) + (args ? ' ' + args : '');
+                } else if (ext === 'ts') {
+                    const runner = commandExists('tsx') ? 'tsx' : (commandExists('ts-node') ? 'ts-node' : null);
+                    if (!runner) return 'Error: tsx or ts-node not found';
+                    cmd = buildCmd([runner, file]) + (args ? ' ' + args : '');
                 } else if (ext === 'sh' || ext === 'bash') {
-                    cmd = `bash ${file} ${args}`;
+                    if (IS_WINDOWS && !commandExists('bash')) {
+                        return 'Error: bash not found on Windows. Install Git Bash or WSL.';
+                    }
+                    cmd = buildCmd(['bash', file]) + (args ? ' ' + args : '');
+                } else if (ext === 'ps1') {
+                    cmd = buildCmd(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file]) + (args ? ' ' + args : '');
                 } else if (ext === 'c') {
-                    const out = file.replace('.c', '');
-                    cmd = `gcc ${file} -o ${out} && ./${out} ${args}`;
+                    const out = file.replace(/\.c$/i, '') + exeSuffix;
+                    cmd = buildCmd(['gcc', file, '-o', out]) + ' && ' + buildCmd([runPrefix + out]) + (args ? ' ' + args : '');
                 } else if (ext === 'cpp' || ext === 'cc' || ext === 'cxx') {
-                    const out = file.replace(/\.(cpp|cc|cxx)$/, '');
-                    cmd = `g++ ${file} -o ${out} && ./${out} ${args}`;
+                    const out = file.replace(/\.(cpp|cc|cxx)$/i, '') + exeSuffix;
+                    cmd = buildCmd(['g++', file, '-o', out]) + ' && ' + buildCmd([runPrefix + out]) + (args ? ' ' + args : '');
                 } else if (ext === 'rs') {
-                    const out = file.replace('.rs', '');
-                    cmd = `rustc ${file} -o ${out} && ./${out} ${args}`;
+                    const out = file.replace(/\.rs$/i, '') + exeSuffix;
+                    cmd = buildCmd(['rustc', file, '-o', out]) + ' && ' + buildCmd([runPrefix + out]) + (args ? ' ' + args : '');
                 } else if (ext === 'go') {
-                    cmd = `go run ${file} ${args}`;
+                    cmd = buildCmd(['go', 'run', file]) + (args ? ' ' + args : '');
                 } else if (ext === 'java') {
-                    const className = file.replace('.java', '');
-                    cmd = `javac ${file} && java ${className} ${args}`;
+                    const baseName = path.basename(file).replace(/\.java$/i, '');
+                    const dir = path.dirname(file) || '.';
+                    cmd = buildCmd(['javac', file]) + ' && ' + buildCmd(['java', '-cp', dir, baseName]) + (args ? ' ' + args : '');
                 } else {
                     return `Error: Unsupported file type: ${ext}`;
                 }
-                
+
                 const options = {
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
-                    cwd: this.session?.workingDir || process.cwd()
+                    cwd: this.session?.workingDir || process.cwd(),
+                    shell: IS_WINDOWS ? true : '/bin/sh'
                 };
-                
-                // Add stdin if provided
+
                 if (stdin) {
                     options.input = stdin;
                 }
-                
+
                 const result = execSync(cmd, options);
-                
                 return result || '(no output)';
             } catch (e) {
                 return `Error: ${e.message}\n${e.stderr || ''}`;
             }
         }, 'Compile and execute code file. Params: {"file": "main.py", "args": "arg1 arg2", "stdin": "input data"}');
 
-        // Advanced debugging tools
         this.register('bash', async ({ command, working_dir }) => {
-            // Handle export commands by persisting to process.env
-            const exportMatch = command.trim().match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-            if (exportMatch) {
-                const key = exportMatch[1];
-                // Strip inline comments and surrounding quotes
-                let val = exportMatch[2].replace(/\s*#.*$/, '').trim();
-                val = val.replace(/^(['"])(.*)\1$/, '$2');
+            const trimmed = command.trim();
+            const stripValue = (raw) => {
+                let v = raw.replace(/\s*#.*$/, '').trim();
+                v = v.replace(/^(['"])(.*)\1$/, '$2');
+                return v;
+            };
+            const envMatch =
+                trimmed.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/) ||
+                trimmed.match(/^set\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/i) ||
+                trimmed.match(/^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+            if (envMatch) {
+                const key = envMatch[1];
+                const val = stripValue(envMatch[2]);
                 process.env[key] = val;
                 return `Exported: ${key}=${val}`;
             }
             try {
+                const shellOpt = IS_WINDOWS ? (commandExists('bash') ? 'bash' : true) : '/bin/sh';
                 const result = execSync(command, {
-                    shell: '/bin/sh',
+                    shell: shellOpt,
                     encoding: 'utf-8',
                     maxBuffer: 10 * 1024 * 1024,
                     timeout: 30000,
@@ -461,18 +600,14 @@ class ToolRegistry {
             } catch (e) {
                 return `Error: ${e.message}\n${e.stderr || ''}`;
             }
-        }, 'Execute bash command. Params: {"command": "ls -la", "working_dir": "/path"}');
+        }, 'Execute shell command. Params: {"command": "ls -la", "working_dir": "/path"}');
 
         this.register('tree', async ({ path: dirPath = '.', depth = 2, ignore = [] }) => {
+            const ignorePatterns = ['node_modules', '.git', 'dist', 'build', ...ignore];
             try {
-                const ignorePatterns = ['node_modules', '.git', 'dist', 'build', ...ignore];
-                const ignoreArgs = ignorePatterns.map(p => `-I "${p}"`).join(' ');
-                const cmd = `tree -L ${depth} ${ignoreArgs} ${dirPath}`;
-                const result = execSync(cmd, { encoding: 'utf-8', timeout: 10000 });
-                return result;
+                return this.manualTree(dirPath, depth, ignorePatterns) || '(empty)';
             } catch (e) {
-                // Fallback if tree not installed
-                return this.manualTree(dirPath, depth, ignorePatterns);
+                return `Error: ${e.message}`;
             }
         }, 'Show directory tree. Params: {"path": ".", "depth": 2, "ignore": ["tmp"]}');
 
@@ -494,7 +629,15 @@ class ToolRegistry {
                 } else if (action === 'pull') {
                     cmd = 'git pull';
                 } else if (action === 'branch') {
-                    cmd = branch ? `git checkout -b ${branch}` : 'git branch';
+                    if (branch) {
+                        const result = execFileSync('git', ['checkout', '-b', branch], {
+                            encoding: 'utf-8',
+                            timeout: 30000,
+                            cwd: this.session?.workingDir || process.cwd()
+                        });
+                        return result || `Created and switched to branch ${branch}`;
+                    }
+                    cmd = 'git branch';
                 } else {
                     return 'Error: Invalid action. Use: status, diff, log, commit, push, pull, branch';
                 }
@@ -553,7 +696,8 @@ class ToolRegistry {
                 if (manager === 'npm') {
                     cmd = `npm install ${packages.join(' ')}`;
                 } else if (manager === 'pip') {
-                    cmd = `pip install ${packages.join(' ')}`;
+                    const py = resolvePython();
+                    cmd = buildCmd([py.cmd, ...py.prefixArgs, '-m', 'pip', 'install', ...packages]);
                 } else if (manager === 'cargo') {
                     cmd = `cargo add ${packages.join(' ')}`;
                 } else {
