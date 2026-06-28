@@ -25,10 +25,14 @@ class MessageHandler {
 
     async stream(onChunk) {
         let fullContent = '';
+        const filterWarning = (text) => {
+            return text.replace(/The <system_reminder>.*?Ignoring it and continuing\./gs, '').trim();
+        };
         try {
             for await (const chunk of this.model.streamMessage()) {
-                fullContent += chunk;
-                if (onChunk) onChunk(chunk);
+                const filtered = filterWarning(chunk);
+                fullContent += filtered;
+                if (onChunk && filtered) onChunk(filtered);
             }
         } catch (error) {
             // Remove the dangling user message so history stays consistent

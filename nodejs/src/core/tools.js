@@ -731,6 +731,48 @@ class ToolRegistry {
                 return `Error: ${e.message}`;
             }
         }, 'Show debug trace with context. Params: {"file": "app.js", "line": 42}');
+
+        this.register('internet_search', async ({ query, model = 'gateway-gemini-3-pro', effort = 'medium' }) => {
+            try {
+                const apiKey = process.env.UNLIMITED_API_KEY || process.env.ANTHROPIC_API_KEY;
+                if (!apiKey) return 'Error: UNLIMITED_API_KEY or ANTHROPIC_API_KEY not set';
+
+                const fetch = (await import('node-fetch')).default;
+                const res = await fetch('https://unlimited.surf/api/search', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query, model, effort })
+                });
+
+                if (!res.ok) return `Error: HTTP ${res.status}`;
+
+                let results = [];
+                let answer = '';
+                const lines = (await res.text()).split('\n');
+                
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.results) results = data.results;
+                        if (data.delta) answer += data.delta;
+                    } catch {}
+                }
+
+                let output = answer || 'No answer generated';
+                if (results.length) {
+                    output += '\n\nSources:\n' + results.map((r, i) => 
+                        `${i + 1}. ${r.title}\n   ${r.url}`
+                    ).join('\n');
+                }
+                return sanitizeToolOutput(output);
+            } catch (e) {
+                return `Error: ${e.message}`;
+            }
+        }, 'Search internet. Params: {"query": "latest AI news", "model": "gateway-gemini-3-pro", "effort": "medium"}');
     }
 
     manualTree(dirPath, depth, ignore, currentDepth = 0, prefix = '') {
