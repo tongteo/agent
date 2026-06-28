@@ -13,7 +13,7 @@ const { AgentPrompt, ToolParser, IntentParser } = require('./core/agent');
 const { SubagentManager } = require('./core/subagent');
 
 class ChatBot {
-    constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false) {
+    constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false, enableSubagents = true) {
         this.apiKey = apiKey;
         this.modelName = model;
         this.agentMode = agentMode;
@@ -23,7 +23,7 @@ class ChatBot {
         this.messageHandler = null;
         this.executor = null;
         this.tools = agentMode ? new ToolRegistry(this.session) : null;
-        this.subagentManager = agentMode ? new SubagentManager(apiKey, model, process.cwd()) : null;
+        this.subagentManager = (agentMode && enableSubagents) ? new SubagentManager(apiKey, model, process.cwd()) : null;
         this._lastHandledResponse = null;
     }
 
