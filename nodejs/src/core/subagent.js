@@ -21,6 +21,7 @@ class SubagentManager {
             // Lazy load to avoid circular dependency
             const { ChatBot } = require('../chat-bot');
             const bot = new ChatBot(this.apiKey, this.model, false);
+            await bot.init();
             bot.session.workingDir = this.rootPath;
             
             this.activeSubagents.set(subagentId, bot);
