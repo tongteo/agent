@@ -1,16 +1,21 @@
+/**
+ * @fileoverview Agent prompt templates and tool call/intent parsers.
+ * Constructs system prompts for the AI model and parses tool calls from its output.
+ */
+
 const os = require('os');
 
 function getOSContext() {
     const platform = os.platform();
-    // TODO: implement Windows-specific shell/path adjustments (win32)
     if (platform === 'darwin') return 'OS: macOS. Use macOS-compatible shell commands (bash/zsh, no apt/yum).';
     if (platform === 'linux') return 'OS: Linux. Use Linux shell commands.';
     return `OS: ${platform}.`;
 }
 
 class AgentPrompt {
+    static loadedSkillsPrompt = '';
+
     static getCompactPrompt(toolRegistry) {
-        // Short prompt for models with limited context tolerance (e.g. Gemini web)
         const priority = ['read_file', 'write_file', 'str_replace', 'list_dir', 'find_files', 'bash', 'execute', 'grep', 'append', 'read_lines', 'delete_file', 'use_subagent'];
         const allTools = toolRegistry.getToolList().split('\n');
         const tools = [
@@ -36,9 +41,15 @@ User: read main.c
 <tool>read_file</tool>
 <params>{"path":"main.c"}</params>
 
+User: write sort.c
+<tool>write_file</tool>
+<params>{"path":"sort.c","content":"#include <stdio.h>"}</params>
+
 User: run tests
 <tool>bash</tool>
-<params>{"command":"npm test"}</params>`;
+<params>{"command":"npm test"}</params>
+
+IMPORTANT: To create or write to files, always use the write_file tool — never use bash heredoc (cat << EOF). write_file handles multi-line content reliably and works in all modes.${AgentPrompt.loadedSkillsPrompt}`;
     }
 
     static getSystemPrompt(toolRegistry) {
@@ -48,51 +59,50 @@ ${getOSContext()}
 
 You are an AI agent with tool integration capabilities. Use the provided tools to complete user tasks.
 
-Core Rules:
-- For file operations: always use the appropriate tool
-- Creating NEW files: use write_file
-- Modifying EXISTING files: use str_replace (can be called multiple times)
-- Never overwrite existing files with write_file
+## Core Rules
+- CREATE new files: use write_file
+- MODIFY existing files: use str_replace (can be called multiple times)
+- Never overwrite existing files with write_file — always use str_replace or insert_at_line
 - After completing tasks, provide a brief confirmation
+- When a tool call returns an error, ANALYZE the error and fix it — do NOT blindly retry the same failing action
 
-Tool Call Format:
+## Tool Call Format
 <tool>tool_name</tool>
 <params>{"key": "value"}</params>
 
-EXAMPLES (study these carefully):
+## Skills System (Self-Improvement)
+- skills_list, skill_view, skill_load, skill_search, skill_manage
+When you discover a reusable pattern or workflow, create a skill.
 
-Example 1 — list files:
-User: "list files in /tmp"
-Assistant: <tool>read_dir</tool>
-<params>{"path": "/tmp"}</params>
-
-Example 2 — read a file:
-User: "show me the content of README.md"
-Assistant: <tool>read_file</tool>
-<params>{"path": "README.md"}</params>
-
-Example 3 — create a file:
-User: "create hello.txt with content Hello World"
-Assistant: <tool>write_file</tool>
-<params>{"path": "hello.txt", "content": "Hello World"}</params>
-
-Example 4 — modify a file:
-User: "change x=5 to x=10 in test.c"
-Assistant: <tool>str_replace</tool>
-<params>{"path": "test.c", "old_str": "int x = 5;", "new_str": "int x = 10;"}</params>
+## Error Recovery
+When a tool returns an error: READ the error, understand what went wrong. Never repeat the same failing call more than 1 time. If stuck after 3 attempts, try a different approach.
 
 Available tools:
 ${toolRegistry.getToolList()}
 
-Note: Use str_replace for modifications, write_file only for new files.`;
+Note: Use str_replace for modifications, write_file only for new files.${AgentPrompt.loadedSkillsPrompt}`;
     }
 }
 
 class ToolParser {
+    static get TOOL_NAMES() {
+        if (this._toolNames && this._toolNames.length > 0) return this._toolNames;
+        return ['write_file', 'read_file', 'list_dir', 'str_replace', 'execute', 'bash',
+                'grep', 'find_files', 'append', 'read_lines', 'delete_file', 'tree', 'git',
+                'internet_search', 'analyze_code', 'package_install', 'debug_trace', 'use_subagent',
+                'skills_list', 'skill_view', 'skill_load', 'skill_search', 'skill_manage'];
+    }
+
+    static syncToolNames(toolRegistry) {
+        if (toolRegistry && toolRegistry.tools) {
+            this._toolNames = Array.from(toolRegistry.tools.keys());
+        }
+    }
+
     static parse(text) {
         const calls = [];
 
-        // Parse owl-alpha/longcat format: <longcat_tool_call>cmd</longcat_arg_value>
+        // longcat format
         const longcatRegex = /<longcat_tool_call>([\s\S]*?)<\/longcat_arg_value>/g;
         let m;
         while ((m = longcatRegex.exec(text)) !== null) {
@@ -101,83 +111,193 @@ class ToolParser {
         }
         if (calls.length) return calls;
 
-        // Unescape HTML entities (Gemini web sometimes escapes XML)
+        // Unescape HTML entities, strip fences
         text = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-        // Strip markdown code fences wrapping tool calls
         text = text.replace(/```(?:xml|json)?\n([\s\S]*?)```/g, '$1');
 
-        // Fallback: original <tool>/<params> XML format
+        // XML <tool>/<params> format
         const toolRegex = /<tool>(.*?)<\/tool>\s*<params>(.*?)<\/params>/gs;
         let match;
-        
         while ((match = toolRegex.exec(text)) !== null) {
-            try {
-                let paramsStr = match[2].trim();
-                // Clean up common formatting issues
-                paramsStr = paramsStr.replace(/}>/g, '}');
-                paramsStr = paramsStr.replace(/>\s*$/g, '');
-                
-                // Try to parse JSON
-                let params;
-                try {
-                    // Escape unescaped control characters inside JSON string values
-                    const sanitized = paramsStr.replace(
-                        /("(?:[^"\\]|\\.)*")/gs,
-                        (m) => m.replace(/[\x00-\x1f]/g, c => {
-                            const map = {'\n':'\\n','\r':'\\r','\t':'\\t'};
-                            return map[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`;
-                        })
-                    );
-                    params = JSON.parse(sanitized);
-                } catch (e) {
-                    // Extract path + content manually as last resort
-                    const pathMatch = paramsStr.match(/"path"\s*:\s*"([^"]+)"/);
-                    // Extract content (everything between "content": " and the last ")
-                    const contentMatch = paramsStr.match(/"content"\s*:\s*"([\s\S]*?)"\s*}?\s*$/);
-                    
-                    if (pathMatch && contentMatch) {
-                        let content = contentMatch[1];
-                        content = content
-                            .replace(/\\n/g, '\n')
-                            .replace(/\\t/g, '\t')
-                            .replace(/\\r/g, '\r')
-                            .replace(/\\"/g, '"')
-                            .replace(/\\\\/g, '\\');
-                        params = { path: pathMatch[1], content };
-                    } else {
-                        // Generic fallback: extract all "key":"value" pairs
-                        const pairs = {};
-                        const kvRegex = /"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-                        let kv;
-                        while ((kv = kvRegex.exec(paramsStr)) !== null) pairs[kv[1]] = kv[2].replace(/\\n/g,'\n').replace(/\\t/g,'\t').replace(/\\"/g,'"').replace(/\\\\/g,'\\');
-                        // Also extract numeric/boolean values
-                        const numRegex = /"(\w+)"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)/g;
-                        let nv;
-                        while ((nv = numRegex.exec(paramsStr)) !== null) if (!(nv[1] in pairs)) try { pairs[nv[1]] = JSON.parse(nv[2]); } catch {}
-                        if (Object.keys(pairs).length) params = pairs;
-                        else throw new Error('Could not extract params');
-                    }
+            const parsed = ToolParser._parseParams(match[1].trim(), match[2].trim());
+            if (parsed) calls.push(parsed);
+        }
+        if (calls.length) return calls;
+
+        // JSON format: tool_name followed by JSON object
+        calls.push(...ToolParser._parseJsonFormat(text));
+        if (calls.length) return calls;
+
+        return calls;
+    }
+
+    static _parseJsonFormat(text) {
+        const calls = [];
+        const toolPattern = ToolParser.TOOL_NAMES.map(n =>
+            n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        ).join('|');
+        const nameRegex = new RegExp('(?<![\\w])(' + toolPattern + ')(?![\\w])', 'g');
+
+        let cursor = 0;
+        let m;
+        while ((m = nameRegex.exec(text)) !== null) {
+            const tool = m[1].trim();
+            const searchStart = m.index + m[0].length;
+            nameRegex.lastIndex = searchStart;
+            const nextMatch = nameRegex.exec(text);
+            const searchEnd = nextMatch ? nextMatch.index : text.length;
+            nameRegex.lastIndex = searchStart;
+            const snippet = text.slice(searchStart, searchEnd);
+            const jsonStr = ToolParser._extractJsonBraces(snippet);
+            if (jsonStr) {
+                const parsed = ToolParser._parseParams(tool, jsonStr);
+                if (parsed) {
+                    calls.push(parsed);
+                    const jsonEnd = searchStart + snippet.indexOf(jsonStr) + jsonStr.length;
+                    nameRegex.lastIndex = jsonEnd;
+                    cursor = jsonEnd;
+                    continue;
                 }
-                
-                calls.push({
-                    tool: match[1].trim(),
-                    params: params
-                });
-            } catch (e) {
-                console.error(`Failed to parse tool call: ${e.message}`);
+            }
+            cursor = searchStart;
+            nameRegex.lastIndex = cursor;
+        }
+        return calls;
+    }
+
+    static _extractJsonBraces(str) {
+        let depth = 0;
+        let start = -1;
+        for (let i = 0; i < str.length; i++) {
+            const ch = str[i];
+            if (ch === '{') {
+                if (depth === 0) start = i;
+                depth++;
+            } else if (ch === '}') {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    return str.substring(start, i + 1);
+                }
             }
         }
-        
-        return calls;
+        return null;
+    }
+
+    static _parseParams(tool, paramsStr) {
+        paramsStr = paramsStr.trim();
+        paramsStr = paramsStr.replace(/}>/g, '}');
+        paramsStr = paramsStr.replace(/>\s*$/g, '');
+
+        // Try JSON.parse
+        try {
+            const params = JSON.parse(paramsStr);
+            return { tool, params };
+        } catch (e) {
+            // Sanitize control chars inside strings
+            try {
+                const sanitized = paramsStr.replace(
+                    /("(?:[^"\\]|\\.)*")/gs,
+                    (m) => m.replace(/[\x00-\x1f]/g, c => {
+                        const map = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+                        return map[c] || `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`;
+                    })
+                );
+                const params = JSON.parse(sanitized);
+                return { tool, params };
+            } catch (e2) {
+                return ToolParser._extractParamsManually(tool, paramsStr);
+            }
+        }
+    }
+
+    static _extractParamsManually(tool, paramsStr) {
+        const params = {};
+
+        // Find "key": " and read value char-by-char.
+        // For content values (C code), unescaped " inside C strings are
+        // accepted; only stop when " is followed by JSON delimiters.
+        const extractValue = (key, isContent = false) => {
+            const keyRe = new RegExp(
+                '"' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+                '"\\s*:\\s*"', 's'
+            );
+            const m = paramsStr.match(keyRe);
+            if (!m) return null;
+
+            let i = m.index + m[0].length;
+            let result = '';
+            while (i < paramsStr.length) {
+                const ch = paramsStr[i];
+                if (ch === '\\') {
+                    // Decode JSON escape sequences during scan
+                    i++;
+                    if (i >= paramsStr.length) break;
+                    const next = paramsStr[i];
+                    if (next === 'n') result += '\n';       // \n -> newline
+                    else if (next === 't') result += '\t';  // \t -> tab
+                    else if (next === 'r') result += '\x0d';  // CR
+                    else if (next === '"') result += '"';    // quote
+                    else if (next === '\\') result += '\\';  // \\ -> \
+                    else { result += ch; result += next; }  // unknown: preserve
+                    i++;
+                } else if (ch === '"') {
+                    if (!isContent) break;
+                    const rest = paramsStr.slice(i + 1);
+                    if (/^\s*}\s*/.test(rest) || /^\s*,\s*"/.test(rest) || /^\s*"\s*[a-zA-Z_]/.test(rest)) break;
+                    result += ch;
+                    i++;
+                } else {
+                    result += ch;
+                    i++;
+                }
+            }
+            return result;
+        };
+
+        const path = extractValue('path');
+        if (path) params.path = path;
+
+        const contentRaw = extractValue('content', true);
+        if (contentRaw) {
+            params.content = contentRaw;
+        }
+
+        const command = extractValue('command', true);
+        if (command) params.command = command;
+        const query = extractValue('query');
+        if (query) params.query = query;
+        const working_dir = extractValue('working_dir');
+        if (working_dir) params.working_dir = working_dir;
+
+        // Numeric/boolean/null keys
+        const numRegex = /"(\w+)"\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)/g;
+        let nv;
+        while ((nv = numRegex.exec(paramsStr)) !== null) {
+            if (!(nv[1] in params)) {
+                try { params[nv[1]] = JSON.parse(nv[2]); } catch {}
+            }
+        }
+
+        if (Object.keys(params).length > 0) return { tool, params };
+
+        // Last resort
+        const pairs = {};
+        const kvRegex = /"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        let kv;
+        while ((kv = kvRegex.exec(paramsStr)) !== null) {
+            pairs[kv[1]] = kv[2]
+                .replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+                .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        }
+        if (Object.keys(pairs).length) return { tool, params: pairs };
+
+        return null;
     }
 }
 
 class IntentParser {
-    // Parse user's direct input into a tool call (for gemini-web pre-flight dispatch)
     static parseUserInput(text) {
         const t = text.trim();
-
-        // "run fermat" / "run fermat 15" / "run ./fermat 15" / "execute fermat"
         const runMatch = t.match(/^(?:run|exec(?:ute)?)\s+[`'"]?(\.\/)?(\S+?)(?:\s+(\S+(?:\s+\S+)*))?[`'"]?$/i);
         if (runMatch) {
             const name = runMatch[2];
@@ -188,74 +308,74 @@ class IntentParser {
                 return { tool: 'execute', params: { command: cmd } };
             }
         }
-
-        // "compile fermat.c" / "gcc fermat.c"
-        const compileMatch = t.match(/^(?:compile|gcc|g\+\+|clang)\s+[`'"]?([\w./]+\.[ch](?:pp)?)[`'"]?/i);
+        const compileMatch = t.match(/^(?:compile|build|gcc|g\+\+|clang|python3?|py)\s+[`'"]?([\w./]+\.[\w]+)[`'"]?/i);
         if (compileMatch) {
             const file = compileMatch[1];
+            const ext = file.split('.').pop().toLowerCase();
             const out = file.replace(/\.[^.]+$/, '');
-            return { tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } };
+            if (ext === 'c') {
+                return { tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } };
+            } else if (ext === 'cpp' || ext === 'cc' || ext === 'cxx') {
+                return { tool: 'execute', params: { command: `g++ "${file}" -o "${out}" && "./${out}"` } };
+            } else if (ext === 'py' || ext === 'python') {
+                return { tool: 'execute', params: { command: `python3 "${file}"` } };
+            } else {
+                return { tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } };
+            }
         }
-
-        // "ls" / "list files"
         if (/^(?:ls|list(?:\s+files)?)\s*(.*)$/.test(t)) {
             const dir = t.match(/\s+([\w./~-]+)$/)?.[1] || '.';
             return { tool: 'list_dir', params: { path: dir } };
         }
-
         return null;
     }
 
-    // Parse natural language response into tool calls when model doesn't use XML format
     static parse(text, context = {}) {
-        const t = text.toLowerCase();
         const calls = [];
+        const searchText = text.length > 3000 ? text.substring(0, 3000) : text;
+        const searchT = searchText.toLowerCase();
 
-        // Don't parse intent from very long explanatory responses
-        if (text.length > 2000) return calls;
-
-        // compile/build/run a file
-        const compileMatch = text.match(/(?:compile|build|gcc|g\+\+)\s+[`'"]?([\w./]+\.[ch](?:pp)?)[`'"]?/i)
-            || (t.includes('compil') || t.includes('build') || t.includes('gcc')) && context.lastFile?.match(/\.[ch](pp)?$/) && [null, context.lastFile];
+        const compileMatch = searchText.match(/(?:compile|build|gcc|g\+\+|clang|python3?|py)\s+[`'"]?([\w./]+\.[\w]+)[`'"]?/i)
+            || (searchT.includes('compil') || searchT.includes('build') || searchT.includes('gcc') || searchT.includes('python') || searchT.includes('compile')) && context.lastFile && [null, context.lastFile];
         if (compileMatch?.[1]) {
             const file = compileMatch[1];
+            const ext = file.split('.').pop().toLowerCase();
             const out = file.replace(/\.[^.]+$/, '');
-            calls.push({ tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } });
+            if (ext === 'c') {
+                calls.push({ tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } });
+            } else if (ext === 'cpp' || ext === 'cc' || ext === 'cxx') {
+                calls.push({ tool: 'execute', params: { command: `g++ "${file}" -o "${out}" && "./${out}"` } });
+            } else if (ext === 'py' || ext === 'python') {
+                calls.push({ tool: 'execute', params: { command: `python3 "${file}"` } });
+            } else {
+                calls.push({ tool: 'execute', params: { command: `gcc "${file}" -o "${out}" -lm && "./${out}"` } });
+            }
             return calls;
         }
-
-        // run/execute a binary or command (./fermat, run fermat, execute fermat, etc.)
-        const runMatch = text.match(/(?:run(?:ning)?|execut(?:e|ing)|launch)\s+(?:the\s+(?:program|executable|binary|command)\s+)?[`'"]?(\.\/[\w.-]+|[\w-]+(?:\.exe)?)[`'"]?/i);
+        const runMatch = searchText.match(/(?:run(?:ning)?|execut(?:e|ing)|launch)\s+(?:the\s+(?:program|executable|binary|command)\s+)?[`'"]?(\.\/[\w.-]+|[\w-]+(?:\.exe)?)[`'"]?/i);
         if (runMatch?.[1]) {
             const cmd = runMatch[1].startsWith('./') ? runMatch[1] : `./${runMatch[1]}`;
             calls.push({ tool: 'execute', params: { command: cmd } });
             return calls;
         }
-        // read/show/display/open file
-        const readMatch = text.match(/(?:read|show|display|open|view|cat)\s+[`'"]?([\w./]+\.\w+)[`'"]?/i)
-            || (t.includes('read') || t.includes('show') || t.includes('display')) && context.lastFile && [null, context.lastFile];
+        const readMatch = searchText.match(/(?:read|show|display|open|view|cat)\s+[`'"]?([\w./]+\.[a-zA-Z]+)[`'"]?/i)
+            || (searchT.includes('read') || searchT.includes('show') || searchT.includes('display')) && context.lastFile && [null, context.lastFile];
         if (readMatch?.[1]) {
             calls.push({ tool: 'read_file', params: { path: readMatch[1] } });
             return calls;
         }
-
-        // list files/directory
-        if (t.match(/list\s+(?:the\s+)?(?:files|dir|directory|content)/)) {
-            const dirMatch = text.match(/in\s+[`'"]?([\w./~-]+)[`'"]?/i);
+        if (searchT.match(/list\s+(?:the\s+)?(?:files|dir|directory|content)/)) {
+            const dirMatch = searchText.match(/in\s+[`'"]?([\w./~-]+)[`'"]?/i);
             const dir = dirMatch?.[1];
-            // ignore pronouns/articles
             const ignore = new Set(['the', 'your', 'my', 'this', 'that', 'a', 'an', 'our']);
             calls.push({ tool: 'list_dir', params: { path: (!dir || ignore.has(dir.toLowerCase())) ? '.' : dir } });
             return calls;
         }
-
-        // run/execute a command
-        const cmdMatch = text.match(/(?:run|execute|running)\s+(?:the\s+(?:command\s+)?)?[`'"]([^`'"]+)[`'"]/i);
+        const cmdMatch = searchText.match(/(?:run|execute|running)\s+(?:the\s+(?:command\s+)?)?[`'"]([^`'"]+)[`'"]/i);
         if (cmdMatch) {
             calls.push({ tool: 'execute', params: { command: cmdMatch[1] } });
             return calls;
         }
-
         return calls;
     }
 }

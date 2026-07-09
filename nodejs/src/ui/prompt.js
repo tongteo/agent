@@ -1,15 +1,30 @@
+/**
+ * @fileoverview Interactive prompt manager with history, tab completion, and bracketed paste.
+ * Uses raw terminal mode for arrow key navigation, history browsing, and tab completion.
+ */
+
 class PromptManager {
     constructor() {
+        /** @type {string[]} Command history (most recent first) */
         this._history = [];
+        /** @type {Function|null} Default SIGINT handler */
+        this._sigintDefault = null;
     }
 
+    /** Initialize the prompt: set up SIGINT handler. */
     init() {
         this._sigintDefault = () => { process.stdout.write('\n'); process.exit(0); };
         process.on('SIGINT', this._sigintDefault);
     }
 
+    /**
+     * Drain any pending input from stdin.
+     * @returns {Promise<void>}
+     * @private
+     */
     _drain() {
         return new Promise((resolve) => {
+            if (!process.stdin.isTTY) { resolve(); return; }
             if (process.stdin.isTTY) process.stdin.setRawMode(true);
             process.stdin.resume();
             const discard = () => {};
@@ -21,6 +36,11 @@ class PromptManager {
         });
     }
 
+    /**
+     * Ask a yes/no confirmation question. Returns the single-character response.
+     * @param {string} promptText - Prompt text to display
+     * @returns {Promise<string>} 'y', 'n', or 'a'
+     */
     async confirm(promptText) {
         await this._drain();
         process.stdout.write(promptText);
@@ -42,6 +62,12 @@ class PromptManager {
         });
     }
 
+    /**
+     * Ask for text input with full line editing (arrow keys, home/end, backspace, tab).
+     * @param {string} promptText - Prompt text to display
+     * @param {string[]} [completions] - Tab completion candidates
+     * @returns {Promise<string>} User input text
+     */
     async ask(promptText, completions = ['exit', 'clear', '/model ']) {
         await this._drain();
         process.stdout.write('\x1b[?2004h');
@@ -49,22 +75,20 @@ class PromptManager {
 
         return new Promise((resolve) => {
             let buffer = '';
-            let cursor = 0;       // cursor position within buffer
-            let histIdx = -1;     // -1 = current input
-            let saved = '';       // saved current input when browsing history
+            let cursor = 0;
+            let histIdx = -1;
+            let saved = '';
             let inPaste = false;
             let done = false;
 
-            // Redraw from cursor to end of buffer, then reposition cursor
+            /** Redraw from cursor to end of line. */
             const redraw = () => {
-                // Erase from current position to end of line, rewrite suffix, reposition
                 const suffix = buffer.slice(cursor);
                 process.stdout.write('\x1b[K' + suffix + (suffix ? `\x1b[${suffix.length}D` : ''));
             };
 
-            // Replace entire line content (for history navigation)
+            /** Replace entire line content (for history navigation). */
             const setLine = (text) => {
-                // Move to start of input area, clear to end, write new text
                 if (cursor > 0) process.stdout.write(`\x1b[${cursor}D`);
                 process.stdout.write('\x1b[K' + text);
                 buffer = text;
@@ -149,6 +173,7 @@ class PromptManager {
                     setLine(histIdx === -1 ? saved : this._history[histIdx]);
                     return;
                 }
+
                 // Home / Ctrl-A
                 if (str === '\x1b[H' || str === '\x01') {
                     if (cursor > 0) { process.stdout.write(`\x1b[${cursor}D`); cursor = 0; }
@@ -221,6 +246,7 @@ class PromptManager {
         });
     }
 
+    /** Close the prompt and reset terminal. */
     close() {
         process.stdout.write('\x1b[?2004l');
     }

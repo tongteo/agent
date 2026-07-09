@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Markdown formatter — renders markdown with syntax highlighting.
+ * Uses cli-highlight with Tokyo Night theme for code blocks.
+ */
+
 const chalk = require('chalk');
 
 let highlight;
@@ -42,18 +47,24 @@ try {
     highlight = (code) => code;
 }
 
+/**
+ * Format command output with optional syntax highlighting.
+ * @param {string} output - Output text
+ * @param {string} [language='bash'] - Language for highlighting
+ * @returns {string} Formatted output
+ */
 function formatOutput(output, language = 'bash') {
     if (!output || output.length === 0) return '(no output)';
-    
+
     const maxLines = 50;
     const lines = output.split('\n');
-    
+
     if (lines.length > maxLines) {
         const truncated = lines.slice(0, maxLines).join('\n');
         const remaining = lines.length - maxLines;
         return highlight(truncated, { language }) + chalk.yellow(`\n... (${remaining} more lines, output truncated)`);
     }
-    
+
     try {
         return highlight(output, { language });
     } catch (e) {
@@ -61,6 +72,11 @@ function formatOutput(output, language = 'bash') {
     }
 }
 
+/**
+ * Format basic math expressions with unicode operators.
+ * @param {string} text - Text with math expressions
+ * @returns {string} Formatted text
+ */
 function formatMath(text) {
     return text
         .replace(/(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)/g, '$1 + $2 = $3')
@@ -70,6 +86,11 @@ function formatMath(text) {
         .replace(/(\d+)\s*\/\s*(\d+)\s*=\s*(\d+)/g, '$1 ÷ $2 = $3');
 }
 
+/**
+ * Render LaTeX expressions in plain text.
+ * @param {string} expr - LaTeX expression
+ * @returns {string} Rendered text
+ */
 function renderLatex(expr) {
     return expr
         .replace(/\\boxed\{([^}]+)\}/g, '[ $1 ]')
@@ -88,13 +109,24 @@ function renderLatex(expr) {
         .replace(/[{}\\]/g, '');
 }
 
+/**
+ * Render a markdown table row.
+ * @param {string} rest - Table row content
+ * @returns {string} Formatted row
+ * @private
+ */
 function renderTableRow(rest) {
     if (/^[-|\s:]+$/.test(rest)) return '';
     const cells = rest.split('|').map(c => c.trim()).filter((c, i, a) => !(i === a.length - 1 && c === ''));
     return chalk.dim('  ') + cells.map(c => c.padEnd(14)).join(chalk.dim(' │ '));
 }
 
-// Renders a complete markdown response: code blocks highlighted, bold/inline-code styled
+/**
+ * Render full markdown response with syntax highlighting.
+ * Handles code blocks, bold, inline code, headings, LaTeX, tables.
+ * @param {string} text - Markdown text
+ * @returns {string} Rendered terminal output
+ */
 function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
@@ -121,7 +153,7 @@ function renderMarkdown(text) {
             const shown = bodyLines.slice(0, MAX);
             const hidden = bodyLines.length - MAX;
             const rendered = shown.map(l => chalk.dim('│ ') + l).join('\n')
-                + (hidden > 0 ? '\n' + chalk.dim(`│ `) + chalk.yellow(`... (${hidden} more lines)`) : '');
+                + (hidden > 0 ? '\n' + chalk.dim('│ ') + chalk.yellow(`... (${hidden} more lines)`) : '');
             out.push(header);
             out.push(rendered);
             inCode = false;
@@ -129,7 +161,7 @@ function renderMarkdown(text) {
         }
         if (inCode) { codeLines.push(line); continue; }
 
-        // inline formatting
+        // Inline formatting
         const formatted = line
             .replace(/\*\*(.+?)\*\*/g, (_, t) => chalk.bold(t))
             .replace(/`([^`]+)`/g, (_, t) => chalk.cyan(t))
@@ -141,7 +173,7 @@ function renderMarkdown(text) {
         out.push(formatted);
     }
 
-    // flush unclosed code block
+    // Flush unclosed code block
     if (inCode && codeLines.length) {
         out.push(chalk.dim('│ ') + codeLines.join('\n' + chalk.dim('│ ')));
     }

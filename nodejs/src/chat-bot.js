@@ -1,8 +1,8 @@
 const chalk = require('chalk');
+const fs = require('fs');
+const path = require('path');
 const { SessionManager } = require('./core/session');
 const { MessageHandler } = require('./core/message');
-const { GeminiAdapter } = require('./models/gemini');
-const { CustomAdapter } = require('./models/custom');
 const { CommandExecutor } = require('./commands/executor');
 const { extractCommands } = require('./commands/parser');
 const { isDangerous, isInteractive } = require('./commands/validator');
@@ -11,6 +11,8 @@ const { PromptManager } = require('./ui/prompt');
 const { ToolRegistry } = require('./core/tools');
 const { AgentPrompt, ToolParser, IntentParser } = require('./core/agent');
 const { SubagentManager } = require('./core/subagent');
+const { autoFixCFile } = require('./core/auto-fix');
+const { startSpinner, stopSpinner, withSigint, createStreamTimeout, hasToolCall, stripToolCalls } = require('./core/stream-utils');
 
 class ChatBot {
     constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false, enableSubagents = true) {
@@ -25,58 +27,23 @@ class ChatBot {
         this.tools = agentMode ? new ToolRegistry(this.session) : null;
         this.subagentManager = (agentMode && enableSubagents) ? new SubagentManager(apiKey, model, process.cwd()) : null;
         this._lastHandledResponse = null;
+        /** @type {AbortController|null} */
+        this._abortController = null;
     }
 
     async init() {
         this.session.load();
         
-        const baseUrl = process.env.CUSTOM_API_BASE;
-        const openrouterKey = process.env.OPENROUTER_API_KEY;
-        const ollamaModel = process.env.OLLAMA_MODEL;
         const geminiCookies = process.env.GEMINI_COOKIES;
         const claudeCookies = process.env.CLAUDE_COOKIES;
-        const unlimitedKey = process.env.UNLIMITED_API_KEY;
-        const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
-        if (unlimitedKey) {
-            const { UnlimitedAdapter } = require('./models/unlimited');
-            const unlimitedModel = process.env.UNLIMITED_MODEL || 'gateway-gpt-5';
-            const unlimitedBase = process.env.UNLIMITED_BASE_URL || 'https://unlimited.surf';
-            this.model = new UnlimitedAdapter(unlimitedKey, unlimitedModel, unlimitedBase);
-            if (this.agentMode && this.tools) {
-                this.model.tools = this.tools.getToolSchemas();
-            }
-        } else if (anthropicKey) {
-            const { AnthropicAdapter } = require('./models/anthropic');
-            const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7-20260101';
-            const anthropicBase = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-            this.model = new AnthropicAdapter(anthropicKey, anthropicModel, anthropicBase);
-            if (this.agentMode && this.tools) {
-                this.model.tools = this.tools.getToolSchemas();
-            }
-        } else if (claudeCookies) {
+        if (claudeCookies) {
             const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
             this.model = new ClaudeCookiesAdapter();
         } else if (geminiCookies) {
             const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
             this.model = new GeminiCookiesAdapter();
-        } else if (ollamaModel) {
-            const { OllamaAdapter } = require('./models/ollama');
-            const ollamaBase = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-            this.model = new OllamaAdapter(ollamaModel, ollamaBase);
-            if (this.agentMode && this.tools) {
-                this.model.tools = this.tools.getToolSchemas();
-            }
-        } else if (openrouterKey) {
-            const { OpenRouterAdapter } = require('./models/openrouter');
-            const orModel = process.env.OPENROUTER_MODEL || 'openrouter/owl-alpha';
-            this.model = new OpenRouterAdapter(openrouterKey, orModel);
-            if (this.agentMode && this.tools) {
-                this.model.tools = this.tools.getToolSchemas();
-            }
-        } else if (baseUrl) {
-            this.model = new CustomAdapter(this.apiKey, this.modelName, baseUrl);
         } else {
-            this.model = new GeminiAdapter(this.apiKey, this.modelName);
+            throw new Error('No provider configured. Set GEMINI_COOKIES=1 or CLAUDE_COOKIES=1 in .env');
         }
         await this.model.init();
 
@@ -87,7 +54,9 @@ class ChatBot {
                     ? AgentPrompt.getCompactPrompt(this.tools)
                     : AgentPrompt.getSystemPrompt(this.tools))
             : null;
-        this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt);
+        this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt, {
+            toolRegistry: this.tools
+        });
         this.executor = new CommandExecutor(this.session);
         
         if (this.agentMode && this.subagentManager) {
@@ -118,7 +87,7 @@ class ChatBot {
         const u = this.model?.lastUsage;
         if (!u) return;
         const cached = u.prompt_tokens_details?.cached_tokens ?? u.cache_read_input_tokens ?? 0;
-        const parts = [`↑${u.prompt_tokens}`, cached ? chalk.green(`⚡${cached}`) : null, `↓${u.completion_tokens}`].filter(Boolean);
+        const parts = ['\u2191' + u.prompt_tokens, cached ? chalk.green('\u26a1' + cached) : null, '\u2193' + u.completion_tokens].filter(Boolean);
         process.stdout.write(chalk.dim(`  ${parts.join(' ')}\n`));
     }
 
@@ -142,7 +111,7 @@ class ChatBot {
         this.prompt.init();
 
         while (true) {
-            const input = await this.prompt.ask(chalk.bold.green('❯ '), this._getCompletions());
+            const input = await this.prompt.ask(chalk.bold.green('\u276f '), this._getCompletions());
             const msg = input.trim();
 
             if (msg.toLowerCase() === 'exit') {
@@ -173,6 +142,18 @@ class ChatBot {
             }
 
             if (msg) {
+                // Cancel any pending abort controller from previous turn
+                if (this._abortController) {
+                    this._abortController.abort();
+                }
+                this._abortController = new AbortController();
+                const signal = this._abortController.signal;
+
+                // Clean page state between turns
+                if (this.model?._cleanInterturn) {
+                    await this.model._cleanInterturn();
+                }
+
                 // Pre-flight: if agent mode and user input is a clear action command,
                 // dispatch tool directly without asking Gemini
                 if (this.agentMode && this.model.model === 'gemini-web') {
@@ -180,7 +161,7 @@ class ChatBot {
                     if (directCall) {
                         const { tool, params } = directCall;
                         const label = params.path || params.command || '';
-                        process.stdout.write(`  ${chalk.green('✓')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}\n`);
+                        process.stdout.write(`  ${chalk.green('\u2713')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}\n`);
                         try {
                             const result = await this.tools.execute(tool, params);
                             const displayTools = ['execute', 'bash', 'run_command'];
@@ -191,7 +172,7 @@ class ChatBot {
                             // Feed result back to model for follow-up
                             await this.messageHandler.send(`User ran: ${msg}\nResult:\n${result}`, false);
                         } catch (e) {
-                            process.stdout.write(`  ${chalk.red('✗')} ${e.message}\n`);
+                            process.stdout.write(`  ${chalk.red('\u2717')} ${e.message}\n`);
                             await this.messageHandler.send(`User ran: ${msg}\nError: ${e.message}`, false);
                         }
                     } else {
@@ -202,34 +183,47 @@ class ChatBot {
                 }
                 
                 // Spinner while waiting
-                const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-                let si = 0;
+                const interval = startSpinner();
                 let full = '';
                 let aborted = false;
-                const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
-                const sigintHandler = () => {
+                const cleanupSigint = withSigint(() => {
                     aborted = true;
                     this.model.abort?.();
-                };
-                process.removeListener('SIGINT', this.prompt._sigintDefault);
-                process.once('SIGINT', sigintHandler);
+                }, this.prompt);
                 try {
-                    await this.messageHandler.stream((chunk) => { full += chunk; });
+                    // Check if this turn was aborted before streaming starts
+                    if (signal.aborted) {
+                        aborted = true;
+                    } else {
+                        await this.messageHandler.stream((chunk) => {
+                            if (signal.aborted) {
+                                this.model.abort?.();
+                                aborted = true;
+                            }
+                            if (!aborted) full += chunk;
+                        });
+                    }
                 } finally {
-                    clearInterval(interval);
-                    process.removeListener('SIGINT', sigintHandler);
-                    process.addListener('SIGINT', this.prompt._sigintDefault);
-                    process.stdout.write('\r\x1b[K');
+                    stopSpinner(interval);
+                    cleanupSigint();
                 }
 
                 if (aborted) {
-                    process.stdout.write(chalk.dim('  ↩ interrupted\n\n'));
+                    process.stdout.write(chalk.dim('  \u21a9 interrupted\n\n'));
                     continue;
                 }
 
-                const hasToolCall = full.includes('<tool>') || full.includes('&lt;tool&gt;') || full.includes('<longcat_tool_call>') || full.includes('TOOL_CALL:') || this.model.pendingToolCalls?.length > 0;
-                if (full.trim() && !hasToolCall) {
-                    process.stdout.write(renderMarkdown(full.trim()) + '\n');
+                // Detect JSON-format tool calls (write_file\n{...}, bash\n{...})
+                const hasToolCallFlag = hasToolCall(full, ToolParser.TOOL_NAMES, this.model.pendingToolCalls);
+                if (full.trim()) {
+                    // Show conversational text even when tool call XML/JSON is present
+                    let displayText = full.trim();
+                    if (hasToolCallFlag) {
+                        displayText = stripToolCalls(full, ToolParser.TOOL_NAMES);
+                    }
+                    if (displayText && displayText !== '(no response)') {
+                        process.stdout.write(renderMarkdown(displayText) + '\n');
+                    }
                 }
                 this._printUsage();
                 console.log('');
@@ -243,8 +237,82 @@ class ChatBot {
         }
     }
 
+    /**
+     * Get the content of the last assistant message in history.
+     * @returns {string|null}
+     */
+    async getLastResponse() {
+        if (!this.model.messages || this.model.messages.length === 0) return null;
+        const last = this.model.messages[this.model.messages.length - 1];
+        return last?.content || null;
+    }
+
+    /**
+     * Auto-fix common C compilation errors in a source file.
+     * Delegates to auto-fix module.
+     * @param {string} filePath - Path to the .c file
+     * @param {string} compileError - The gcc error output
+     * @returns {string} Description of what was fixed, or empty string if no fix needed
+     */
+    _autoFixCFile(filePath, compileError) {
+        return autoFixCFile(filePath, compileError);
+    }
+
+    /**
+     * Analyze tool execution results and generate smart feedback.
+     * Detects write_file→compile_fail→write_file loops, injects fix guidance.
+     */
+    _analyzeToolResults(results) {
+        let smartFeedback = '';
+
+        // Check for write_file on a .c/.cpp/.py/.js file right after a compile fail
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            if (!r) continue;
+
+            // Detect: tool=write_file for a source file, right after a gcc/clang error
+            const isSrcWrite = r.tool === 'write_file' && r.params?.path?.match(/\.(c|cpp|py|js|ts|go|rs|java)$/i);
+            if (isSrcWrite) {
+                // Look backward for gcc errors on the same file
+                for (let j = Math.max(0, i - 3); j < i; j++) {
+                    const prev = results[j];
+                    if (prev && prev.tool === 'bash' && prev.result?.match(/(gcc:|clang:|error:|compilation terminated)/i)) {
+                        const srcPath = r.params.path;
+                        smartFeedback += `\n[SMART FIX] "${srcPath}" failed to compile before. Instead of rewriting the whole file:\n`
+                            + `1. read_file "${srcPath}" — examine the code around the error lines\n`
+                            + `2. str_replace — fix only the specific syntax issue (missing brace, semicolon, etc.)\n`
+                            + `3. bash — recompile with gcc\n`
+                            + `Do NOT write_file the entire file again — use str_replace for targeted fixes.\n`;
+                    }
+                }
+            }
+
+            // Detect write_file on same path twice (model rewriting without fixing root cause)
+            if (r.tool === 'write_file' && r.params?.path) {
+                this._rewrittenFiles = this._rewrittenFiles || new Map();
+                const path = r.params.path;
+                const count = (this._rewrittenFiles.get(path) || 0) + 1;
+                this._rewrittenFiles.set(path, count);
+                if (count >= 3) {
+                    smartFeedback += `\n[WRITE LOOP] You have rewritten "${path}" ${count} times.`
+                        + ` STOP rewriting. Read the file first, identify the exact syntax error,`
+                        + ` then use str_replace to fix ONLY the broken lines.\n`;
+                }
+            }
+        }
+        return smartFeedback;
+    }
+
     async handleToolCalls(maxIterations = 20) {
         let iteration = 0;
+        /** Track repeated tool+params to detect loops */
+        const failureCache = new Map();
+        /** Track source files rewritten (write_file) after compile failure */
+        this._rewrittenFiles = this._rewrittenFiles || new Map();
+        /** Track which .c/.cpp files got gcc errors this session */
+        this._failedCompiles = this._failedCompiles || new Map();
+        /** Track whether any tool calls were processed (to prevent duplicate handleCommands) */
+        this._handledToolCalls = false;
 
         while (iteration < maxIterations) {
             // Prefer native function calling (OpenRouter), fallback to XML parsing
@@ -267,27 +335,101 @@ class ChatBot {
                 }
                 // Fallback: extract code block and write to mentioned file
                 if (toolCalls.length === 0 && this.model.model === 'gemini-web') {
-                    const fileMatch = lastResponse.match(/(?:file\s+(?:named?\s+)?|tên\s+(?:là\s+)?|lưu\s+(?:vào\s+)?(?:file\s+)?)[`'"]?([\w./]+\.\w+)[`'"]?/i);
+                    // Broad file name patterns: supports English, Vietnamese, and common formats
+                    const filePatterns = [
+                        /file\s+(?:named?\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+                        /filename\s*[:\s]+[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+                        /tên[:\s]*(?:là\s+)?(?:file)?[:\s]*[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+                        /lưu\s+(?:vào\s+)?(?:file\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+                        /save\s+(?:as\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+                        /(?:^|\s)([\w./]+\.[ch](?:pp)?|\.py|\.js|\.ts|\.go|\.rs|\.java)\s*$/mi
+                    ];
+                    // Code block detection
                     const codeMatch = lastResponse.match(/```(?:\w+)?\n([\s\S]+?)```/);
-                    if (fileMatch && codeMatch && codeMatch[1].length > 100) {
-                        toolCalls = [{ tool: 'write_file', params: { path: fileMatch[1], content: codeMatch[1].trim() }, id: null }];
+
+                    let fileMatch = null;
+                    for (const pattern of filePatterns) {
+                        const m = lastResponse.match(pattern);
+                        if (m) { fileMatch = m[1]; break; }
+                    }
+
+                    if (fileMatch && codeMatch && codeMatch[1].length > 50) {
+                        toolCalls = [{ tool: 'write_file', params: { path: fileMatch, content: codeMatch[1].trim() }, id: null }];
+                    } else if (!fileMatch && codeMatch && codeMatch[1].length > 100) {
+                        // Code block with no explicit filename — try to detect language and generate name
+                        const langMatch = lastResponse.match(/```(\w+)/);
+                        const extMap = { c: 'c', cpp: 'cpp', python: 'py', javascript: 'js',
+                                        typescript: 'ts', go: 'go', rust: 'rs', java: 'java',
+                                        bash: 'sh', shell: 'sh', ruby: 'rb', php: 'php' };
+                        let ext = 'txt';
+                        if (langMatch && extMap[langMatch[1].toLowerCase()]) {
+                            ext = extMap[langMatch[1].toLowerCase()];
+                        }
+                        // Try to find a tool name in the text to determine action
+                        if (lastResponse.match(/write|tạo|lưu|save|create|code|implement|viết/i)) {
+                            const genName = `output.${ext}`;
+                            toolCalls = [{ tool: 'write_file', params: { path: genName, content: codeMatch[1].trim() }, id: null }];
+                        }
                     }
                 }
             }
 
             if (toolCalls.length === 0) break;
-            
+            this._handledToolCalls = true;
+
             const results = [];
+            // Sequential execution — avoids race conditions where a tool
+            // depends on a previous tool's side effect (e.g. write_file → execute)
             for (const { tool, params, id } of toolCalls) {
                 const label = params.path || params.command || params.query || '';
-                process.stdout.write(chalk.dim(`  ⚙  ${tool}`) + (label ? chalk.dim(` ${label}`) : '') + ' ');
-                const spinChars = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-                let si = 0;
-                const spin = setInterval(() => process.stdout.write(`\r  ⚙  ${tool}${label ? ' ' + label : ''} ${spinChars[si++ % spinChars.length]}`), 80);
+                process.stdout.write(chalk.dim(`  \u2699  ${tool}${label ? ' ' + label : ''} `));
+                const spin = startSpinner();
                 try {
-                    const result = await this.tools.execute(tool, params);
-                    clearInterval(spin);
-                    process.stdout.write(`\r\x1b[K  ${chalk.green('✓')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}\n`);
+                    // Detect heredoc file writes: cat << 'EOF' > filename
+                    // The model often uses this instead of write_file, but \n in C code
+                    // gets double-escaped and breaks the heredoc. Convert to write_file.
+                    let resolvedTool = tool;
+                    let resolvedParams = params;
+                    if (tool === 'bash' && typeof params.command === 'string') {
+                        const heredocMatch = params.command.match(/^cat\s+<<\s+'?(\w+)'?\s*>\s*(.+)$/m);
+                        if (heredocMatch) {
+                            const delim = heredocMatch[1];
+                            const filePath = heredocMatch[2].replace(/\s+$/, '');
+                            // Expand ~ in file path
+                            const homedir = require('os').homedir();
+                            const expandedFilePath = filePath.startsWith('~/') ? homedir + filePath.slice(1) : filePath;
+                            let resolvedDir = process.cwd();
+                            if (params.working_dir) {
+                                resolvedDir = params.working_dir;
+                            } else if (this.session?.workingDir) {
+                                resolvedDir = this.session.workingDir;
+                            }
+                            const resolvedFilePath = path.isAbsolute(expandedFilePath) ? expandedFilePath : path.resolve(resolvedDir, expandedFilePath);
+                            const firstNl = params.command.indexOf('\n');
+                            if (firstNl >= 0) {
+                                const afterFirstLine = params.command.substring(firstNl + 1);
+                                const endMarker = '\n' + delim;
+                                const endIdx = afterFirstLine.lastIndexOf(endMarker);
+                                if (endIdx > 0) {
+                                    const fileContent = afterFirstLine.substring(0, endIdx);
+                                    resolvedTool = 'write_file';
+                                    resolvedParams = { path: resolvedFilePath, content: fileContent };
+                                } else {
+                                    // No EOF marker found — still extract content up to last \n
+                                    // This handles truncated heredocs (parser broke at embedded quotes)
+                                    const truncatedContent = afterFirstLine.replace(/\n\s*$/, '');
+                                    if (truncatedContent.length > 10) {
+                                        resolvedTool = 'write_file';
+                                        resolvedParams = { path: resolvedFilePath, content: truncatedContent };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let result = await this.tools.execute(resolvedTool, resolvedParams);
+                    stopSpinner(spin);
+                    process.stdout.write(`
+\x1b[K  ${chalk.green('\u2713')} ${chalk.bold(resolvedTool)}${label ? chalk.dim(' ' + label) : ''}\n`);
 
                     const displayTools = ['execute', 'bash', 'tree', 'git', 'analyze_code', 'debug_trace'];
                     if (displayTools.includes(tool) && result && !result.startsWith('Error:')) {
@@ -295,12 +437,50 @@ class ChatBot {
                         console.log(chalk.dim(lines.join('\n')));
                     }
 
-                    const truncated = result.length > 8000 ? result.substring(0, 8000) + '...(truncated)' : result;
-                    results.push({ tool, id, result: truncated });
+                    // Mark compilation/runtime failures strongly
+                    const isCompileFail = result && (
+                        result.startsWith('gcc:') || result.startsWith('g++:') ||
+                        result.includes('error:') || result.includes('warning: here-document') ||
+                        result.includes('Traceback') || result.includes('SyntaxError') ||
+                        result.includes('IndentationError') || result.includes('NameError') ||
+                        result.includes('TypeError') || result.includes('ModuleNotFoundError')
+                    );
+                    if (isCompileFail) {
+                        const prefix = result.includes('Traceback') ? '[RUNTIME ERROR]' : '[COMPILATION FAILED]';
+                        result = prefix + ' The code did not compile/run correctly. The error above is real — do not claim success.\n' + result;
+                    }
+
+                    // Track compile/runtime failures per source file
+                    if (tool === 'bash' || tool === 'execute') {
+                        const cmd = params.command || '';
+                        const srcMatch = cmd.match(/(?:gcc|g\+\+|python3?)\s+(?:\S+\s+)*['"]?([\w./]+\.[\w]+)['"]?/i);
+                        if (srcMatch && (result?.startsWith('gcc:') || result?.startsWith('g++:') || result?.includes('error:') || result?.includes('Traceback'))) {
+                            const srcPath = srcMatch[1];
+                            const prevFails = (this._failedCompiles.get(srcPath) || 0) + 1;
+                            this._failedCompiles.set(srcPath, prevFails);
+                        }
+                    }
+
+                    // Detect loops: same tool + same params failing repeatedly
+                    const isError = result && (result.startsWith('Error:') || result.startsWith('gcc:') || result.includes('error:'));
+                    if (isError) {
+                        const hash = `${tool}:${JSON.stringify(params)}`;
+                        const prev = (failureCache.get(hash) || 0) + 1;
+                        failureCache.set(hash, prev);
+                        if (prev >= 2) {
+                            // Same tool+params failed twice — force model to read+analyze instead of retrying
+                            const augmentedResult = `[LOOP DETECTED] This is attempt #${prev + 1} with the same params. STOP retrying. Read the file around the error line, analyze the root cause, fix with str_replace, then re-run.\nError: ${result}`;
+                            results.push({ tool, id, result: augmentedResult });
+                            continue;
+                        }
+                    }
+
+                    const truncated = result.length > 3000 ? result.substring(0, 3000) + '...(truncated)' : result;
+                    results.push({ tool, params, id, result: truncated });
                 } catch (e) {
-                    clearInterval(spin);
-                    process.stdout.write(`\r\x1b[K  ${chalk.red('✗')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}: ${e.message}\n`);
-                    results.push({ tool, id, result: `Error: ${e.message}` });
+                    stopSpinner(spin);
+                    process.stdout.write(`\r\x1b[K  ${chalk.red('\u2717')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}: ${e.message}\n`);
+                    results.push({ tool, params, id, result: `Error: ${e.message}` });
                 }
             }
 
@@ -311,36 +491,79 @@ class ChatBot {
                 }
                 await this.messageHandler.send(null, false); // trigger stream without adding user msg
             } else {
-                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}\n\nIf task needs more steps, continue. Otherwise respond briefly to confirm.`;
+                // Include original user request so model knows what remains
+                const origUserMsg = this.model.messages.find(m =>
+                    m.role === 'user' && m.content && !m.content.startsWith('[Tool Results]') && !m.content.startsWith('[Command Results]')
+                );
+                const origHint = origUserMsg ? `\nOriginal request: ${origUserMsg.content.substring(0, 200)}` : '';
+
+                // Run smart analysis on results to detect write→compile→write loops
+                let smartAnalysis = this._analyzeToolResults(results);
+
+                // Also check if we're rewriting a file that failed compilation
+                const lastWrite = results.filter(r => r.tool === 'write_file').pop();
+                if (lastWrite && lastWrite.params?.path) {
+                    const compileFails = this._failedCompiles.get(lastWrite.params.path) || 0;
+                    if (compileFails >= 1) {
+                        smartAnalysis += `\n[NOTE] "${lastWrite.params.path}" previously failed to compile (${compileFails}x). `
+                            + `If you just rewrote it again, you may have introduced the same bugs. `
+                            + `Use read_file to examine the code, identify the exact error, and use str_replace to fix only the broken parts.\n`;
+                    }
+                }
+
+                // Auto-fix: when same file keeps failing to compile, try to fix it automatically
+                for (const [srcPath, failCount] of this._failedCompiles) {
+                    if (failCount >= 2 && fs.existsSync(srcPath)) {
+                        const fixResult = this._autoFixCFile(srcPath, '');
+                        if (fixResult) {
+                            smartAnalysis += `\n[AUTO-FIX] ${fixResult}\n`;
+                            // Clear the counter so we don't keep re-fixing
+                            this._failedCompiles.set(srcPath, 0);
+                        }
+                    }
+                }
+
+                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\nIf task needs more steps (e.g. after writing a file, compile and run it), continue. Otherwise respond briefly to confirm.`;
                 await this.messageHandler.send(feedback, false);
             }
             
             // Stream response
-            const spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-            let si = 0;
+            const streamInterval = startSpinner();
             let full = '';
             let aborted = false;
-            const STREAM_TIMEOUT = 300000; // 5 minutes
-            const streamTimeout = setTimeout(() => {
+            const streamTimeout = createStreamTimeout(300000, () => {
                 aborted = true;
                 this.model.abort?.();
-                console.log(chalk.yellow(`\n⚠️  Stream timeout (${STREAM_TIMEOUT / 1000}s)\n`));
-            }, STREAM_TIMEOUT);
-            const sigintHandler = () => { aborted = true; this.model.abort?.(); };
-            process.removeListener('SIGINT', this.prompt._sigintDefault);
-            process.once('SIGINT', sigintHandler);
-            const interval = setInterval(() => process.stdout.write(`\r${chalk.dim(spinner[si++ % spinner.length])}`), 80);
+            });
+            const cleanupSigint = withSigint(() => { aborted = true; this.model.abort?.(); }, this.prompt);
             try {
                 await this.messageHandler.stream((chunk) => { full += chunk; });
             } finally {
                 clearTimeout(streamTimeout);
-                clearInterval(interval);
-                process.removeListener('SIGINT', sigintHandler);
-                process.addListener('SIGINT', this.prompt._sigintDefault);
-                process.stdout.write('\r\x1b[K');
+                stopSpinner(streamInterval);
+                cleanupSigint();
             }
 
-            if (full.trim() && !full.includes('<tool>')) {
+            // Detect JSON-format tool calls
+            const hasToolCallFlag = hasToolCall(full, ToolParser.TOOL_NAMES);
+            if (full.trim() && !hasToolCallFlag && full.trim() !== '(no response)') {
+                // Post-loop verification: if compile failed & model claims success, force retry
+                if (full.trim().match(/(?:thành công|success|hoàn tất|done|completed|finished)/i)) {
+                    const lastResults = results || [];
+                    const hasCompileFail = lastResults.some(r =>
+                        r.result && r.result.startsWith('[COMPILATION FAILED]')
+                    );
+                    if (hasCompileFail) {
+                        const forcedMsg = '[SYSTEM] You reported success, but the code did NOT compile. '
+                            + 'Read the compilation error above carefully. '
+                            + 'Use read_file to examine the source file, identify the exact syntax issue, '
+                            + 'then use str_replace to fix only the broken lines. '
+                            + 'Do NOT rewrite the whole file and do NOT claim success until gcc exits without errors.';
+                        await this.messageHandler.send(forcedMsg, false);
+                        iteration++;
+                        continue;
+                    }
+                }
                 process.stdout.write(renderMarkdown(full.trim()) + '\n');
             }
             console.log('');
@@ -350,17 +573,29 @@ class ChatBot {
         }
         
         if (iteration >= maxIterations) {
-            console.log(chalk.yellow(`\n⚠️  Reached maximum iterations (${maxIterations})\n`));
+            console.log(chalk.yellow(`\n\u26a0\ufe0f  Reached maximum iterations (${maxIterations})\n`));
         }
     }
 
     async handleCommands() {
+        // If handleToolCalls already processed tool calls this cycle, skip command extraction
+        // to prevent duplicate execution (the same model response may contain both tool calls and bash blocks)
+        if (this._handledToolCalls) {
+            this._handledToolCalls = false;
+            return;
+        }
         const maxIterations = 20;
         let iteration = 0;
 
         while (iteration < maxIterations) {
             const lastResponse = await this.getLastResponse();
             if (!lastResponse || lastResponse === this._lastHandledResponse) return;
+
+            // Skip command extraction if response contains code blocks
+            // (likely a model explanation, not shell commands to execute)
+            if (lastResponse.match(/```(?:c|cpp|python|js|ts|java|go|rs|xml|json|yaml|yml|sql|html|css)\b/i)) {
+                return;
+            }
 
             const commands = extractCommands(lastResponse);
             if (commands.length === 0) return;
@@ -376,7 +611,7 @@ class ChatBot {
                     console.log('');
                     commands.forEach((cmd) => {
                         const preview = cmd.includes('\n') ? cmd.split('\n')[0] + '...' : cmd;
-                        const icon = isDangerous(cmd) ? chalk.red('  ⚠  bash ') : chalk.dim('  ⚙  bash ');
+                        const icon = isDangerous(cmd) ? chalk.red('  \u26a0  bash ') : chalk.dim('  \u2699  bash ');
                         process.stdout.write(icon + chalk.bold(preview) + '\n');
                     });
                     const sessionKey = await this.prompt.confirm(
@@ -384,7 +619,7 @@ class ChatBot {
                             ? chalk.yellow(`  Run ${commands.length > 1 ? 'these commands' : 'this command'}? [y]es / [n]o / [a]ll: `)
                             : chalk.dim(`  Run ${commands.length > 1 ? 'these commands' : 'this command'}? [y]es / [n]o / [a]ll: `)
                     );
-                    if (sessionKey === 'n' || sessionKey === '\u0003') return;
+                    if (sessionKey === 'n') return;
                     if (sessionKey === 'a') this.session.allowAll = true;
                     else if (sessionKey !== 'y') return;
                 }
@@ -392,15 +627,15 @@ class ChatBot {
                 for (const cmd of commands) {
                     const preview = cmd.includes('\n') ? cmd.split('\n')[0] + '...' : cmd;
                     if (!this.session.allowAll && isDangerous(cmd)) {
-                        process.stdout.write(chalk.red(`  ⚠  bash `) + chalk.bold(preview) + '\n');
-                        const key = await this.prompt.confirm(chalk.yellow('  Dangerous — confirm (y/n): '));
-                        if (key !== 'y') { process.stdout.write(`  ${chalk.dim('✗ skipped')}\n`); continue; }
+                        process.stdout.write(chalk.red(`  \u26a0  bash `) + chalk.bold(preview) + '\n');
+                        const key = await this.prompt.confirm(chalk.yellow('  Dangerous \u2014 confirm (y/n): '));
+                        if (key !== 'y') { process.stdout.write(`  ${chalk.dim('\u2717 skipped')}\n`); continue; }
                     }
                     if (isInteractive(cmd)) {
                         outputs.push(`$ ${cmd}\n${await this.executor.executeInteractive(cmd, this.prompt)}`);
                         continue;
                     }
-                    process.stdout.write(`  ${chalk.green('✓')} ${chalk.bold('bash')} ${chalk.dim(preview)}\n`);
+                    process.stdout.write(`  ${chalk.green('\u2713')} ${chalk.bold('bash')} ${chalk.dim(preview)}\n`);
                     const output = this.executor.execute(cmd);
                     if (output?.trim()) {
                         const lines = output.trim().split('\n').slice(0, 20);
@@ -415,7 +650,7 @@ class ChatBot {
                         outputs.push(`$ ${cmd}\n${await this.executor.executeInteractive(cmd, this.prompt)}`);
                         continue;
                     }
-                    process.stdout.write(`  ${chalk.green('✓')} ${chalk.bold('bash')} ${chalk.dim(preview)}\n`);
+                    process.stdout.write(`  ${chalk.green('\u2713')} ${chalk.bold('bash')} ${chalk.dim(preview)}\n`);
                     const output = this.executor.execute(cmd);
                     if (output?.trim()) {
                         const lines = output.trim().split('\n').slice(0, 20);
@@ -430,7 +665,7 @@ class ChatBot {
             await this.messageHandler.send(`[Command Results]\n${outputs.join('\n')}`, false);
             let full = '';
             await this.messageHandler.stream((chunk) => { full += chunk; });
-            if (full.trim()) process.stdout.write(renderMarkdown(full.trim()) + '\n');
+            if (full.trim() && full.trim() !== '(no response)') process.stdout.write(renderMarkdown(full.trim()) + '\n');
             this._printUsage();
             console.log('');
 
@@ -440,135 +675,53 @@ class ChatBot {
 
     async _handleModelCommand(msg) {
         const parts = msg.trim().split(/\s+/);
-        // /model list
-        if (parts[1] === 'list') {
-            await this._listModels();
+        const newModel = parts[1];
+        if (!newModel) {
+            console.log(`Current model: ${this.model.model || 'unknown'}\n`);
             return;
         }
-        // /model <provider> <model>  OR  /model <model>
-        if (parts.length >= 3) {
-            await this._switchProvider(parts[1], parts.slice(2).join(' '));
-        } else if (parts.length === 2) {
-            const modelArg = parts[1];
-            if (modelArg === 'claude-web') {
-                await this._switchProvider('claude-web', '');
-            } else if (modelArg === 'gemini-web') {
-                await this._switchProvider('gemini-web', '');
-            } else {
-                // Just change model name on current provider
-                this.messageHandler.model.model = modelArg;
-                console.log(chalk.green(`✓ Model: ${modelArg}\n`));
-            }
-        } else {
-            const cur = this.messageHandler.model;
-            const provider = cur.constructor.name.replace('Adapter', '').toLowerCase();
-            console.log(chalk.cyan(`Provider: ${provider}  Model: ${cur.model}`));
-            console.log(chalk.dim('Usage: /model list | /model <name> | /model <provider> <model>'));
-            console.log(chalk.dim('Providers: ollama, openrouter, gemini, custom, gemini-web, claude-web\n'));
-        }
-    }
-
-    async _listModels() {
-        const axios = require('axios');
-        const base = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+        console.log(`Switching model to: ${newModel}...`);
         try {
-            const { data } = await axios.get(`${base}/api/tags`, { timeout: 3000 });
-            const models = data.models?.map(m => m.name) || [];
-            console.log(chalk.cyan('Ollama models:'));
-            models.forEach(m => console.log('  ' + m));
-            if (!models.length) console.log(chalk.dim('  (none)'));
-        } catch {
-            console.log(chalk.dim('Ollama not available'));
+            this.model.setModel?.(newModel);
+            this.messageHandler.reset();
+            console.log(`Model changed to ${newModel}\n`);
+        } catch (e) {
+            console.log(`Error changing model: ${e.message}\n`);
         }
-        console.log('');
     }
 
-    async _switchProvider(provider, modelName) {
-        const prevMessages = this.messageHandler.model.messages.slice(); // keep history
-        let newModel;
-        switch (provider) {
-            case 'claude-web': {
-                const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
-                newModel = new ClaudeCookiesAdapter();
-                break;
-            }
-            case 'gemini-web': {
-                const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
-                newModel = new GeminiCookiesAdapter();
-                break;
-            }
-            case 'ollama': {
-                const { OllamaAdapter } = require('./models/ollama');
-                newModel = new OllamaAdapter(modelName, process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
-                break;
-            }
-            case 'openrouter': {
-                const { OpenRouterAdapter } = require('./models/openrouter');
-                newModel = new OpenRouterAdapter(process.env.OPENROUTER_API_KEY, modelName);
-                break;
-            }
-            case 'gemini': {
-                const { GeminiAdapter } = require('./models/gemini');
-                newModel = new GeminiAdapter(process.env.GEMINI_API_KEY || this.apiKey, modelName);
-                break;
-            }
-            case 'custom': {
-                const { CustomAdapter } = require('./models/custom');
-                newModel = new CustomAdapter(process.env.CUSTOM_API_KEY || this.apiKey, modelName, process.env.CUSTOM_API_BASE);
-                break;
-            }
-            case 'anthropic': {
-                const { AnthropicAdapter } = require('./models/anthropic');
-                const key = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
-                const base = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-                newModel = new AnthropicAdapter(key, modelName || process.env.ANTHROPIC_MODEL || 'claude-opus-4-7-20260101', base);
-                break;
-            }
-            default:
-                console.log(chalk.red(`Unknown provider: ${provider}. Use: ollama, openrouter, gemini, custom, gemini-web, claude-web, anthropic\n`));
-                return;
-        }
-        await newModel.init();
-        // Don't carry over old history — web adapters maintain server-side context
-        const isWebAdapter = ['claude-web', 'gemini-web'].includes(provider);
-        newModel.messages = isWebAdapter ? [] : prevMessages;
-        if (this.agentMode && this.tools) newModel.tools = this.tools.getToolSchemas();
-        // Update agentPrompt for web adapters
-        if (this.agentMode && isWebAdapter) {
-            this.messageHandler.agentPrompt = AgentPrompt.getCompactPrompt(this.tools);
-        }
-        this.messageHandler.model = newModel;
-        this.model = newModel;
-        console.log(chalk.green(`✓ Switched to ${provider}${modelName ? '/' + modelName : ''}\n`));
-    }
-
-    async getLastResponse() {
-        const messages = this.messageHandler.model.messages.filter(m => m.role === 'assistant');
-        if (messages.length === 0) return null;
-        return messages[messages.length - 1].content;
-    }
-
-    _lastMentionedFile(text) {
-        const m = text?.match(/\b([\w./][\w./]*\.\w+)\b/);
-        return m?.[1] || null;
+    async _handleToolContext(msg) {
+        // Handle tool context commands
     }
 
     _getCompletions() {
-        const models = ['/model claude-web', '/model gemini-web'];
-        const ollamaModel = process.env.OLLAMA_MODEL;
-        if (ollamaModel) models.push(`/model ollama ${ollamaModel}`);
-        const orModel = process.env.OPENROUTER_MODEL;
-        if (orModel) models.push(`/model openrouter ${orModel}`);
-        return ['exit', 'clear', ...models];
+        return [
+            'exit',
+            'clear',
+            '/model ',
+            '/think',
+            '/think on',
+            '/think off'
+        ];
     }
 
-    cleanup() {
-        if (this.subagentManager) {
-            this.subagentManager.cleanup();
+    /**
+     * Extract mentioned file from text using broad patterns.
+     * @param {string} text - Model response text
+     * @returns {string|null} Last mentioned file path or null
+     */
+    _lastMentionedFile(text) {
+        if (!text) return null;
+        const patterns = [
+            /[`'"]?([\w./]+\.\w+)[`'"]?/i,
+            /file\s+(?:named?\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
+            /filename\s*[:\s]+[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i
+        ];
+        for (const pattern of patterns) {
+            const m = text.match(pattern);
+            if (m) return m[1];
         }
-        if (this.tools) {
-            this.tools.cleanup();
-        }
+        return null;
     }
 }
 

@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Command executor — runs shell commands with session-aware working dir,
+ * cd/export handling, and interactive (node-pty) support.
+ */
+
 const { execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
@@ -12,11 +17,20 @@ try {
 }
 
 class CommandExecutor {
+    /**
+     * @param {import('../core/session').SessionManager} session - Session manager
+     */
     constructor(session) {
+        /** @type {import('../core/session').SessionManager} */
         this.session = session;
+        /** @type {string} */
         this.shell = this.getShell();
     }
 
+    /**
+     * Get the system shell path.
+     * @returns {string} Shell executable path
+     */
     getShell() {
         if (process.platform === 'win32') {
             return process.env.ComSpec || 'cmd.exe';
@@ -24,6 +38,12 @@ class CommandExecutor {
         return '/bin/bash';
     }
 
+    /**
+     * Execute a shell command and return output.
+     * Built-in handling for `cd` and `export` commands.
+     * @param {string} command - Shell command to run
+     * @returns {string} Command output
+     */
     execute(command) {
         try {
             const cdMatch = command.match(/^\s*cd\s+([^&|;]+)$/);
@@ -47,17 +67,22 @@ class CommandExecutor {
         }
     }
 
+    /**
+     * Handle `cd <dir>` — change working directory in session.
+     * @param {string} targetDir - Directory to change to
+     * @returns {string} Status message
+     */
     handleCd(targetDir) {
         targetDir = targetDir.trim().replace(/^['"]|['"]$/g, '');
-        
+
         if (targetDir.startsWith('~')) {
             targetDir = targetDir.replace('~', os.homedir());
         }
-        
+
         if (!path.isAbsolute(targetDir)) {
             targetDir = path.resolve(this.session.workingDir, targetDir);
         }
-        
+
         if (fs.existsSync(targetDir) && fs.statSync(targetDir).isDirectory()) {
             this.session.workingDir = targetDir;
             this.session.save();
@@ -67,6 +92,12 @@ class CommandExecutor {
         }
     }
 
+    /**
+     * Handle `export VAR=value` — set environment variable in session.
+     * @param {string} varName - Variable name
+     * @param {string} varValue - Variable value
+     * @returns {string} Status message
+     */
     handleExport(varName, varValue) {
         varValue = varValue.trim().replace(/^['"]|['"]$/g, '');
         this.session.envVars[varName] = varValue;
@@ -74,6 +105,13 @@ class CommandExecutor {
         return `Exported: ${varName}=${varValue}`;
     }
 
+    /**
+     * Execute an interactive command using node-pty.
+     * Falls back to error message if node-pty is not installed.
+     * @param {string} command - Command to run interactively
+     * @param {import('../ui/prompt').PromptManager} promptManager - Prompt manager
+     * @returns {Promise<string>} Output of interactive session
+     */
     async executeInteractive(command, promptManager) {
         if (!pty) {
             return 'Error: node-pty not installed. Run: npm install node-pty';
@@ -82,7 +120,6 @@ class CommandExecutor {
         return new Promise((resolve) => {
             console.log(chalk.cyan('\n🔄 Starting interactive session... (Ctrl+D to end)\n'));
 
-            // Release terminal fully before handing to pty
             if (promptManager && promptManager.close) {
                 promptManager.close();
             }
@@ -115,7 +152,6 @@ class CommandExecutor {
                 process.stdin.pause();
                 process.stdin.removeListener('data', onData);
 
-                // Reinitialize readline for agent
                 if (promptManager) promptManager.init();
 
                 console.log(chalk.cyan('\n✓ Interactive session ended\n'));

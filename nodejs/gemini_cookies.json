@@ -1,0 +1,233 @@
+[
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-STRP",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "ANmZwa1Yp1N6uosxmgkx58QIvcJux-NXUJNTEwbbOnoN1aXcWAbzWhYivDF9knBgB_3jBk_giOwi2Zn7_xOOMkPR2pvEb3blGjNK"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "AEC",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "AdJVEasrKc9-PuiXpGRVgwk8rI2_3F6swqi41rUd3mjzsjAmJkld6SMkZ98"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-BUCKET",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "CKIG"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_gcl_au",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "1.1.697217961.1783214716"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "GA1.1.736672148.1783214717"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "NID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "532=V-gae9_SdzcDoF-X8GWDVSD33u0VIIH2cs3yobIddXwpOR3gLXgQGOJQeoE0SJqQ7H5blILs9Q3YhdUGmGY5Fmg1idgTNYKz0hfQ6HKEboPt8ZIFK0B9yB7lbFHizvef4_4BVFIT0uEfwxorFsHxjfRj02c1CuqJHsvJ-0eZ2JcE6yAjXt0lUzZZusfzbmIePxmy2y2gUtCZ-RPkMz8DMAu7LKp0yQAWEAkxFyAzpFOkcxmXBuLIFRTGmZYlp0fcHtCmbSNx_X2j5T-aF4vc0L9EGGVkoa1i4_5dgihQJptrYEDm3DE8pnvc7vZHP8etj29HCTGJ6F4DsQYs43Df-Qc901jnB_jBWzdDQElG0cICHZMTlUUJyeYRqZMQMmEB8e4KnELZZ0nnsl8g815d3XM2W3XTw6V2FGRfHrLFQzNFVRoH-u1DPDvJV7-ALwgLcXJji0RuVGQ4MDsZsXQ489xTj7djDxhUDIxdQDRX9Mk5WQgSyKsX9RxwNcC8TiNMdO0anQlCl0CvtNA3F-rYmTjJVXwLkpSBipKa0xfeywcQcQ5J6yVMGDeg_imEglQPsY_Szl7LwoQIxolmz7XqJwr1DRVzYL3F6pYaRFcoKNqbu_7emdNEkY2NB-8NxbgYbiZ4xIItfeI5dmGicshkKeQ2Nppwta9L2-4uvyhjbdoWj6BzC2QzaaubMRMC-HQA4cfrWLtrES4JJYDvftxO"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "g.a000_wgwCyZbY_CFIuT7VW7Nm78SAJAQRyKsTd4Wq6oNjgzi3k12nMl2TWsiGxmKAsl9ge8ZZgACgYKAfkSARUSFQHGX2MiJcB4e1_er2O7TQya0T2h6hoVAUF8yKpGaAiaeylnE1AQST-P5BeR0076"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-1PSID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "g.a000_wgwCyZbY_CFIuT7VW7Nm78SAJAQRyKsTd4Wq6oNjgzi3k12jWeaBRrA4vxTbptlCZbTpgACgYKAeASARUSFQHGX2MimRRSmImpS6eCI8WTtWekzhoVAUF8yKpgFZM8RHoN9VOHUVKkLGub0076"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-3PSID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "g.a000_wgwCyZbY_CFIuT7VW7Nm78SAJAQRyKsTd4Wq6oNjgzi3k128Iwx9s_Ykr0lzJNvqIMEVwACgYKAdcSARUSFQHGX2MiqQwZsK4_AjXuYNJEPO0J_BoVAUF8yKpFFFe5kF_IlqCnPWAGkp7L0076"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "HSID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "Aen1SLO5Ww9qUOUre"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SSID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "ARTJhyZ6lqVRp5ZjI"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "APISID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "R-HHYJzk28IHYoGf\/AeRxXEAMYQwMcrE5u"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SAPISID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "Xx4fDjeamTeAYZY6\/A5sTwrzWMLycpmin5"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-1PAPISID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "Xx4fDjeamTeAYZY6\/A5sTwrzWMLycpmin5"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-3PAPISID",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "Xx4fDjeamTeAYZY6\/A5sTwrzWMLycpmin5"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "COMPASS",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "gemini-pd=CjwACWuJV93jFYb_b6k1ZbZc5AVi75OXfwVJx6huPFdJgLZgT-iphNSBtyIyTho-2Gurv4U86El7hPmdVFUQv4is0gYaZgAJa4lXbwUeHRqYjzlscW1DgB1aReBYeb4jHD1OPkGGggK3oFsPdL3RgnLSarq2bvlzim5ox_rCHQ8iYSbtHucDT_-fsvxR6faFPZU2vj5HnAdC4Vzlzsj0_1heTJn9aKBON2J5cyABMAE"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga_BF8Q35BMLM",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "GS2.1.s1783214717$o1$g1$t1783214784$j60$l0$h0"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga_WC57KJ50ZZ",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "GS2.1.s1783214717$o1$g1$t1783214786$j58$l0$h0"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SIDCC",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "AKEyXzUAjuVO1og8oTLvk0S8jY73UCjjcxgxffLjGC9yAKGrhaWy39Jhvp6Dia50RIkZ-Duk"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-1PSIDCC",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "AKEyXzW-2rYcZ5H31E1rH69USBYQlx2kpIRbd5L-NCB7l7Z7Vt4WXkql0t3b3FYU-lo0-IoEWw"
+  },
+  {
+    "domain": ".gemini.google.com",
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-3PSIDCC",
+    "path": "\/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "value": "AKEyXzWwXc9QJi9VA-tbxqK4-tOBQrS5xXl9STqCz62gLVFS8hBILSH2wLYDEWkI1f5Nrd3d8w"
+  }
+]

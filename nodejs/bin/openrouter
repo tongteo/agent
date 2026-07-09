@@ -2,9 +2,38 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env'), quiet: true });
 const { ChatBot } = require('../src/chat-bot');
 
-const apiKey = process.env.CUSTOM_API_KEY || process.env.GEMINI_API_KEY || 'dummy';
-const model = process.env.CUSTOM_MODEL || process.env.GEMINI_MODEL || 'gpt-oss:20b';
-const agentMode = !process.argv.includes('--chat'); // agent mode by default
+async function main() {
+    const bot = new ChatBot('', '', true);
+    await bot.init();
 
-const bot = new ChatBot(apiKey, model, agentMode);
-bot.init().then(() => bot.chat());
+    if (process.stdin.isTTY) {
+        // Interactive mode
+        await bot.chat();
+    } else {
+        // Non-interactive: read all piped input, process once, exit
+        const chunks = [];
+        for await (const chunk of process.stdin) {
+            chunks.push(chunk);
+        }
+        const input = Buffer.concat(chunks).toString('utf-8').trim();
+        if (input) {
+            await bot.messageHandler.send(input);
+            let full = '';
+            await bot.messageHandler.stream((chunk) => { full += chunk; });
+            if (full.trim()) {
+                const { renderMarkdown } = require('../src/ui/formatter');
+                process.stdout.write(renderMarkdown(full.trim()) + '\n');
+            }
+            if (bot.agentMode) {
+                await bot.handleToolCalls();
+            }
+        }
+        bot.prompt.close();
+        process.exit(0);
+    }
+}
+
+main().catch(e => {
+    console.error('Fatal:', e.message);
+    process.exit(1);
+});

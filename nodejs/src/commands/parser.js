@@ -1,3 +1,13 @@
+/**
+ * @fileoverview Enhanced command extractor — parses model output for shell commands.
+ * Supports multiple formats: longcat, ```bash blocks, and Gemini/Bash sections.
+ */
+
+/**
+ * Check if a line reads like the start of a command (vs. data output).
+ * @param {string} line - Line to check
+ * @returns {boolean} Whether the line starts a command
+ */
 function isCommandLine(line) {
     const t = line.trim();
     if (!t || t.startsWith('#')) return true;
@@ -7,11 +17,20 @@ function isCommandLine(line) {
     return /^[a-zA-Z$.\/~`\-\[\{_]/.test(t);
 }
 
-// Bare absolute/relative path with no arguments = output, not a command
+/**
+ * Check if a command is just an output path (not a command to run).
+ * @param {string} cmd - Command string
+ * @returns {boolean} Whether this looks like a bare path (output only)
+ */
 function isOutputOnly(cmd) {
     return /^\/[^\s]+$/.test(cmd) || /^\~\/[^\s]+$/.test(cmd);
 }
 
+/**
+ * Check if text has unclosed quotes.
+ * @param {string} text - Text to check
+ * @returns {boolean} Whether quotes are unclosed
+ */
 function hasUnclosedQuote(text) {
     let inSingle = false, inDouble = false;
     for (let i = 0; i < text.length; i++) {
@@ -22,6 +41,15 @@ function hasUnclosedQuote(text) {
     return inSingle || inDouble;
 }
 
+/**
+ * Extract shell commands from model response text.
+ * Supports formats:
+ *   - <longcat_tool_call>...</longcat_arg_value> (owl-alpha)
+ *   - ```bash / ```sh / ```shell blocks
+ *   - "Bash\n..." / "Shell\n..." sections (Gemini format)
+ * @param {string} text - Model response text
+ * @returns {string[]} Extracted commands
+ */
 function extractCommands(text) {
     const commands = [];
 
@@ -35,15 +63,13 @@ function extractCommands(text) {
         });
     }
     if (commands.length) return commands;
-    
-    // Pattern 1: Only ```bash / ```sh / ```shell blocks (NOT cpp, python, etc.)
+
+    // Pattern 1: ```bash / ```sh / ```shell blocks (NOT cpp, python, etc.)
     const codeBlocks = text.match(/```(?:bash|sh|shell)\s*\n([\s\S]*?)```/g);
     if (codeBlocks) {
         codeBlocks.forEach(block => {
             const content = block.replace(/```(?:bash|sh|shell)\s*\n?/, '').replace(/```\s*$/, '').trim();
-            
-            // Keep as single command if: heredoc, line continuation, unclosed quotes,
-            // or any line looks like data (not a command start)
+
             const lines = content.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
             const needsWhole = content.includes('<<') || content.includes('\\\n')
                 || hasUnclosedQuote(content)
@@ -58,17 +84,17 @@ function extractCommands(text) {
             }
         });
     }
-    
-    // Pattern 2: Gemini format "Bash\n..."
+
+    // Pattern 2: Gemini format "Bash\n..." / "Shell\n..."
     const lines = text.split('\n');
     for (let i = 0; i < lines.length; i++) {
         if (/^(Bash|bash|Shell|shell)\s*$/.test(lines[i])) {
             i++;
             if (i >= lines.length) continue;
-            
+
             const cmdStart = lines[i];
             if (cmdStart.includes('<<')) {
-                const eofMatch = cmdStart.match(/<<\s*'?(\w+)'?/);
+                const eofMatch = cmdStart.match(/<<\s*'?(\w+)/);
                 if (eofMatch) {
                     const marker = eofMatch[1];
                     let heredoc = [cmdStart];
@@ -97,8 +123,8 @@ function extractCommands(text) {
             }
         }
     }
-    
+
     return [...new Set(commands)];
 }
 
-module.exports = { extractCommands };
+module.exports = { extractCommands, isCommandLine, isOutputOnly, hasUnclosedQuote };
