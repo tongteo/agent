@@ -6,3 +6,9 @@ math_answer.txt
 .env.*
 src/bridges/*_cookies.json
 src/bridges/.gemini_session.json
+
+# Cookie files (sensitive auth tokens)
+*_cookies.json
+
+# Skill definitions (personal/contextual)
+skills/
