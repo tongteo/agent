@@ -51,12 +51,13 @@ try {
  * Format command output with optional syntax highlighting.
  * @param {string} output - Output text
  * @param {string} [language='bash'] - Language for highlighting
+ * @param {boolean} [agentMode=false] - Whether in agent mode (truncates output)
  * @returns {string} Formatted output
  */
-function formatOutput(output, language = 'bash') {
+function formatOutput(output, language = 'bash', agentMode = false) {
     if (!output || output.length === 0) return '(no output)';
 
-    const maxLines = 50;
+    const maxLines = agentMode ? 50 : Infinity;
     const lines = output.split('\n');
 
     if (lines.length > maxLines) {
@@ -125,9 +126,10 @@ function renderTableRow(rest) {
  * Render full markdown response with syntax highlighting.
  * Handles code blocks, bold, inline code, headings, LaTeX, tables.
  * @param {string} text - Markdown text
+ * @param {boolean} [agentMode=false] - Whether in agent mode (truncates code blocks)
  * @returns {string} Rendered terminal output
  */
-function renderMarkdown(text) {
+function renderMarkdown(text, agentMode = false) {
     const lines = text.split('\n');
     const out = [];
     let inCode = false;
@@ -149,11 +151,11 @@ function renderMarkdown(text) {
             try { body = highlight(code, { language: lang }); }
             catch { body = chalk.hex('#c0caf5')(code); }
             const bodyLines = body.split('\n');
-            const MAX = 20;
+            const MAX = agentMode ? 20 : Infinity;
             const shown = bodyLines.slice(0, MAX);
             const hidden = bodyLines.length - MAX;
             const rendered = shown.map(l => chalk.dim('│ ') + l).join('\n')
-                + (hidden > 0 ? '\n' + chalk.dim('│ ') + chalk.yellow(`... (${hidden} more lines)`) : '');
+                + (agentMode && hidden > 0 ? '\n' + chalk.dim('│ ') + chalk.yellow(`... (${hidden} more lines)`) : '');
             out.push(header);
             out.push(rendered);
             inCode = false;

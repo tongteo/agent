@@ -222,7 +222,7 @@ class ChatBot {
                         displayText = stripToolCalls(full, ToolParser.TOOL_NAMES);
                     }
                     if (displayText && displayText !== '(no response)') {
-                        process.stdout.write(renderMarkdown(displayText) + '\n');
+                        process.stdout.write(renderMarkdown(displayText, this.agentMode) + '\n');
                     }
                 }
                 this._printUsage();
@@ -569,7 +569,7 @@ class ChatBot {
                         continue;
                     }
                 }
-                process.stdout.write(renderMarkdown(full.trim()) + '\n');
+                process.stdout.write(renderMarkdown(full.trim(), this.agentMode) + '\n');
             }
             console.log('');
 
@@ -670,7 +670,7 @@ class ChatBot {
             await this.messageHandler.send(`[Command Results]\n${outputs.join('\n')}`, false);
             let full = '';
             await this.messageHandler.stream((chunk) => { full += chunk; });
-            if (full.trim() && full.trim() !== '(no response)') process.stdout.write(renderMarkdown(full.trim()) + '\n');
+            if (full.trim() && full.trim() !== '(no response)') process.stdout.write(renderMarkdown(full.trim(), this.agentMode) + '\n');
             this._printUsage();
             console.log('');
 
