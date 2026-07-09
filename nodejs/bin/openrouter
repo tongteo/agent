@@ -3,7 +3,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env'), qui
 const { ChatBot } = require('../src/chat-bot');
 
 async function main() {
-    const bot = new ChatBot('', '', true);
+    const args = process.argv.slice(2);
+    const agentMode = !args.includes('--chat');
+    const bot = new ChatBot('', '', agentMode);
     await bot.init();
 
     if (process.stdin.isTTY) {
