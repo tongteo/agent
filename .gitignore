@@ -2,3 +2,7 @@ node_modules/
 .DS_Store
 *.log
 .chatgpt-cli-session.json
+
+# Hide all markdown files except README
+*.md
+!README.md
