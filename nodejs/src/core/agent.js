@@ -296,8 +296,9 @@ class ToolParser {
 }
 
 class IntentParser {
-    static parseUserInput(text) {
+    static parseUserInput(text, options = {}) {
         const t = text.trim();
+        const { lastFile } = options || {};
         const runMatch = t.match(/^(?:run|exec(?:ute)?)\s+[`'"]?(\.\/)?(\S+?)(?:\s+(\S+(?:\s+\S+)*))?[`'"]?$/i);
         if (runMatch) {
             const name = runMatch[2];
@@ -308,7 +309,12 @@ class IntentParser {
                 return { tool: 'execute', params: { command: cmd } };
             }
         }
-        const compileMatch = t.match(/^(?:compile|build|gcc|g\+\+|clang|python3?|py)\s+[`'"]?([\w./]+\.[\w]+)[`'"]?/i);
+        // Match compile/build/run with file path, including Vietnamese keywords
+        let compileMatch = t.match(/^(?:compile|build|gcc|g\+\+|clang|python3?|py|biên.dịch|chạy)\s+[`'"]?([\w./]+\.[\w]+)[`'"]?/i);
+        // Fallback: user said compile/run keywords but no file — use lastFile
+        if (!compileMatch && lastFile && t.match(/^(?:compile|build|run|gcc|g\+\+|clang|chạy|biên.dịch|dịch|chạy.thử)\b/i)) {
+            compileMatch = [null, lastFile];
+        }
         if (compileMatch) {
             const file = compileMatch[1];
             const ext = file.split('.').pop().toLowerCase();

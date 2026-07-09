@@ -157,7 +157,7 @@ class ChatBot {
                 // Pre-flight: if agent mode and user input is a clear action command,
                 // dispatch tool directly without asking Gemini
                 if (this.agentMode && this.model.model === 'gemini-web') {
-                    const directCall = IntentParser.parseUserInput(msg);
+                    const directCall = IntentParser.parseUserInput(msg, { lastFile: this._lastWrittenFile });
                     if (directCall) {
                         const { tool, params } = directCall;
                         const label = params.path || params.command || '';
@@ -437,6 +437,11 @@ class ChatBot {
                         console.log(chalk.dim(lines.join('\n')));
                     }
 
+                    // Track last written file for subsequent "compile and run" shortcut
+                    if (resolvedTool === 'write_file' && resolvedParams?.path && !result?.startsWith('Error:')) {
+                        this._lastWrittenFile = resolvedParams.path;
+                    }
+
                     // Mark compilation/runtime failures strongly
                     const isCompileFail = result && (
                         result.startsWith('gcc:') || result.startsWith('g++:') ||
@@ -523,7 +528,7 @@ class ChatBot {
                     }
                 }
 
-                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\nIf task needs more steps (e.g. after writing a file, compile and run it), continue. Otherwise respond briefly to confirm.`;
+                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\nIf the user's original request needs more steps, continue. Otherwise respond briefly to confirm.`;
                 await this.messageHandler.send(feedback, false);
             }
             

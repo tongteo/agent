@@ -490,6 +490,8 @@ class GeminiClient {
         if (s.length < 15) return false;
         if (/^\s*[[{]/.test(s)) return false; // looks like JSON
         if (/^[a-zA-Z0-9_-]{20,}$/.test(s)) return false; // hex ID
+        // Reject URLs (Google Maps tiles, image data URIs, etc.)
+        if (/^https?:\/\//i.test(s) || /^\/\//.test(s)) return false;
         // Must contain spaces (words/code tokens) or code symbols
         return (/\s/.test(s) && s.split(/\s+/).length >= 2) ||
                (/[<>{}().;=]/.test(s) && s.length >= 15);
