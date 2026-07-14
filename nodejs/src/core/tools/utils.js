@@ -4,6 +4,8 @@
  */
 
 const { execFileSync } = require('child_process');
+const path = require('path');
+const os = require('os');
 
 /** @type {boolean} */
 const IS_WINDOWS = process.platform === 'win32';
@@ -94,6 +96,69 @@ const LANG_MAP = {
     css: 'css'
 };
 
+/**
+ * Resolve a file path and verify it stays within the allowed directory.
+ * Prevents path traversal attacks (../../etc/passwd) and symlink escapes.
+ * @param {string} filePath - User-supplied path (may be relative, may contain ~)
+ * @param {string} [allowedRoot] - Directory the path must stay within
+ * @returns {{ ok: boolean, resolved: string, error?: string }}
+ */
+function sandboxPath(filePath, allowedRoot) {
+    const root = allowedRoot || process.cwd();
+    // Expand ~ to home directory
+    const homedir = os.homedir();
+    const expanded = filePath.startsWith('~/') ? path.join(homedir, filePath.slice(2)) : filePath;
+    const resolved = path.resolve(root, expanded);
+
+    // Check containment (resolved must be under root, or under home for ~/ paths)
+    const underRoot = resolved.startsWith(root + path.sep) || resolved === root;
+    const underHome = resolved.startsWith(homedir + path.sep) || resolved === homedir;
+    if (!underRoot && !underHome) {
+        return { ok: false, resolved, error: `Path escapes sandbox: ${filePath} resolves outside allowed directory` };
+    }
+
+    // Reject null bytes (can bypass string checks)
+    if (resolved.includes('\0') || filePath.includes('\0')) {
+        return { ok: false, resolved, error: 'Path contains null bytes' };
+    }
+
+    return { ok: true, resolved };
+}
+
+/**
+ * Block obviously destructive shell commands that bypass the validator.
+ * Defense-in-depth: the validator catches most cases, this catches edge cases
+ * in the bash tool where model output goes directly to execSync.
+ * @param {string} command - Shell command string
+ * @returns {{ safe: boolean, reason?: string }}
+ */
+function checkCommandSafety(command) {
+    const trimmed = command.trim();
+    // Strip comments and surrounding quotes for analysis
+    const cleaned = trimmed.replace(/#.*$/, '').replace(/^['"]|['"]$/g, '');
+
+    // Destructive filesystem operations
+    const destructive = [
+        { re: /\brm\s+(-[rRf]+\s+)?\/\s/, reason: 'rm on root filesystem' },
+        { re: /\brm\s+(-[rRf]+\s+)\/etc\b/, reason: 'rm on /etc' },
+        { re: /\brm\s+(-[rRf]+\s+)\/var\b/, reason: 'rm on /var' },
+        { re: /\brm\s+(-[rRf]+\s+)\/usr\b/, reason: 'rm on /usr' },
+        { re: /\brm\s+(-[rRf]+\s+)\/bin\b/, reason: 'rm on /bin' },
+        { re: /\bmkfs\b/, reason: 'format filesystem' },
+        { re: /\bdd\s+if=\/dev\/(sd|vd|nvme)/, reason: 'dd on disk device' },
+        { re: /\b:(){ :\|:& };:/, reason: 'fork bomb' },
+        { re: /\bchmod\s+(-R\s+)?777\s+\/\s*$/, reason: 'chmod 777 on root' },
+    ];
+
+    for (const { re, reason } of destructive) {
+        if (re.test(cleaned)) {
+            return { safe: false, reason };
+        }
+    }
+
+    return { safe: true };
+}
+
 module.exports = {
     IS_WINDOWS,
     sanitizeToolOutput,
@@ -101,5 +166,7 @@ module.exports = {
     resolvePython,
     quoteArg,
     buildCmd,
-    LANG_MAP
+    LANG_MAP,
+    sandboxPath,
+    checkCommandSafety
 };

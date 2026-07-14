@@ -95,6 +95,9 @@ class ClaudeClient {
       throw new Error('Missing claude_cookies.json — export cookies from a logged-in Claude browser session');
     }
 
+    // Lock down cookie file permissions (contains auth tokens)
+    try { fs.chmodSync(COOKIES_PATH, 0o600); } catch { /* best-effort */ }
+
     /** @type {Array<{domain: string, name: string, value: string, secure?: boolean, httpOnly?: boolean, path?: string, sameSite?: string}>} */
     let cookies;
     try {
@@ -133,6 +136,31 @@ class ClaudeClient {
    * @returns {Promise<void>}
    */
   async sendMessage(text) {
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 2000;
+    let lastError;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await this._sendMessageOnce(text);
+        return; // success
+      } catch (err) {
+        lastError = err;
+        if (attempt < MAX_RETRIES) {
+          process.stderr.write(`  ⚠ sendMessage failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${err.message}\n`);
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Single attempt to send a message (no retry).
+   * @param {string} text
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _sendMessageOnce(text) {
     // Try multiple selectors in order, prefer data-testid
     const selectors = [
       '[data-testid="chat-input"]',

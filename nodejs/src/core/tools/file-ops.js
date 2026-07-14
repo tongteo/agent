@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { IS_WINDOWS, sanitizeToolOutput } = require('./utils');
+const { IS_WINDOWS, sanitizeToolOutput, sandboxPath } = require('./utils');
 const { DiffFormatter } = require('../../ui/diff');
 
 /**
@@ -31,10 +31,8 @@ function registerFileOps(registry) {
             try {
                 // Resolve relative paths against session workingDir (not process.cwd())
                 const cwd = registry.session?.workingDir || process.cwd();
-                // Expand ~ to home directory
-                const homedir = require('os').homedir();
-                const expandedPath = filePath.startsWith('~/') ? homedir + filePath.slice(1) : filePath;
-                const resolvedPath = path.isAbsolute(expandedPath) ? expandedPath : path.resolve(cwd, expandedPath);
+                const { ok, resolved: resolvedPath, error } = sandboxPath(filePath, cwd);
+                if (!ok) return `Error: ${error}`;
 
                 // Create parent directories if they don't exist
                 const parentDir = path.dirname(resolvedPath);
@@ -185,7 +183,10 @@ function registerFileOps(registry) {
     registry.register('str_replace',
         async ({ path: filePath, old_str, new_str }) => {
             try {
-                const content = fs.readFileSync(filePath, 'utf-8');
+                const cwd = registry.session?.workingDir || process.cwd();
+                const { ok, resolved, error } = sandboxPath(filePath, cwd);
+                if (!ok) return `Error: ${error}`;
+                const content = fs.readFileSync(resolved, 'utf-8');
                 const escapedOld = old_str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const occurrences = (content.match(new RegExp(escapedOld, 'g')) || []).length;
 
@@ -194,9 +195,9 @@ function registerFileOps(registry) {
 
                 const idx = content.indexOf(old_str);
                 const newContent = content.slice(0, idx) + new_str + content.slice(idx + old_str.length);
-                fs.writeFileSync(filePath, newContent);
+                fs.writeFileSync(resolved, newContent);
 
-                const diff = DiffFormatter.formatDiff(content, newContent, filePath);
+                const diff = DiffFormatter.formatDiff(content, newContent, resolved);
                 return diff || 'Replacement successful';
             } catch (e) {
                 return `Error: ${e.message}`;
@@ -209,15 +210,17 @@ function registerFileOps(registry) {
     registry.register('insert_at_line',
         async ({ path: filePath, line, content }) => {
             try {
-                const oldContent = fs.readFileSync(filePath, 'utf-8');
+                const cwd = registry.session?.workingDir || process.cwd();
+                const { ok, resolved, error } = sandboxPath(filePath, cwd);
+                if (!ok) return `Error: ${error}`;
+                const oldContent = fs.readFileSync(resolved, 'utf-8');
                 const lines = oldContent.split('\n');
                 if (line < 0 || line > lines.length) return `Error: line ${line} out of range`;
-
                 lines.splice(line, 0, content);
                 const newContent = lines.join('\n');
-                fs.writeFileSync(filePath, newContent);
+                fs.writeFileSync(resolved, newContent);
 
-                const diff = DiffFormatter.formatDiff(oldContent, newContent, filePath);
+                const diff = DiffFormatter.formatDiff(oldContent, newContent, resolved);
                 return diff || `Inserted at line ${line}`;
             } catch (e) {
                 return `Error: ${e.message}`;
@@ -230,7 +233,10 @@ function registerFileOps(registry) {
     registry.register('append',
         async ({ path: filePath, content }) => {
             try {
-                fs.appendFileSync(filePath, content);
+                const cwd = registry.session?.workingDir || process.cwd();
+                const { ok, resolved, error } = sandboxPath(filePath, cwd);
+                if (!ok) return `Error: ${error}`;
+                fs.appendFileSync(resolved, content);
                 return 'Content appended';
             } catch (e) {
                 return `Error: ${e.message}`;

@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, execFileSync } = require('child_process');
-const { IS_WINDOWS, commandExists, resolvePython, buildCmd } = require('./utils');
+const { IS_WINDOWS, commandExists, resolvePython, buildCmd, checkCommandSafety } = require('./utils');
 
 /**
  * Strip value of quotes and inline comments.
@@ -105,6 +105,11 @@ function registerMiscTools(registry) {
                 const val = stripValue(envMatch[2]);
                 process.env[key] = val;
                 return `Exported: ${key}=${val}`;
+            }
+            // Defense-in-depth: block destructive commands that slip past the validator
+            const safety = checkCommandSafety(trimmed);
+            if (!safety.safe) {
+                return `Error: Command blocked — ${safety.reason}`;
             }
             try {
                 const shellOpt = IS_WINDOWS ? (commandExists('bash') ? 'bash' : true) : '/bin/sh';

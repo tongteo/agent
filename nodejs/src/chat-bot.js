@@ -437,6 +437,12 @@ class ChatBot {
                         console.log(chalk.dim(lines.join('\n')));
                     }
 
+                    // Display code view for file-write tools (DiffFormatter output)
+                    const codeViewTools = ['write_file', 'str_replace'];
+                    if (codeViewTools.includes(resolvedTool) && result && !result.startsWith('Error:')) {
+                        process.stdout.write(result + '\n');
+                    }
+
                     // Track last written file for subsequent "compile and run" shortcut
                     if (resolvedTool === 'write_file' && resolvedParams?.path && !result?.startsWith('Error:')) {
                         this._lastWrittenFile = resolvedParams.path;
@@ -549,27 +555,35 @@ class ChatBot {
                 cleanupSigint();
             }
 
-            // Detect JSON-format tool calls
+            // Display conversational text — show text before tool calls (same as chat())
+            // so the user always sees the model's commentary between tool executions
             const hasToolCallFlag = hasToolCall(full, ToolParser.TOOL_NAMES);
-            if (full.trim() && !hasToolCallFlag && full.trim() !== '(no response)') {
-                // Post-loop verification: if compile failed & model claims success, force retry
-                if (full.trim().match(/(?:thành công|success|hoàn tất|done|completed|finished)/i)) {
-                    const lastResults = results || [];
-                    const hasCompileFail = lastResults.some(r =>
-                        r.result && r.result.startsWith('[COMPILATION FAILED]')
-                    );
-                    if (hasCompileFail) {
-                        const forcedMsg = '[SYSTEM] You reported success, but the code did NOT compile. '
-                            + 'Read the compilation error above carefully. '
-                            + 'Use read_file to examine the source file, identify the exact syntax issue, '
-                            + 'then use str_replace to fix only the broken lines. '
-                            + 'Do NOT rewrite the whole file and do NOT claim success until gcc exits without errors.';
-                        await this.messageHandler.send(forcedMsg, false);
-                        iteration++;
-                        continue;
-                    }
+            if (full.trim() && full.trim() !== '(no response)') {
+                let displayText = full.trim();
+                if (hasToolCallFlag) {
+                    displayText = stripToolCalls(full, ToolParser.TOOL_NAMES);
                 }
-                process.stdout.write(renderMarkdown(full.trim(), this.agentMode) + '\n');
+                if (displayText && displayText !== '(no response)') {
+                    // Post-loop verification: only when model gives final answer (no tool calls)
+                    // and claims success despite previous compilation failures
+                    if (!hasToolCallFlag && displayText.match(/(?:thành công|success|hoàn tất|done|completed|finished)/i)) {
+                        const lastResults = results || [];
+                        const hasCompileFail = lastResults.some(r =>
+                            r.result && r.result.startsWith('[COMPILATION FAILED]')
+                        );
+                        if (hasCompileFail) {
+                            const forcedMsg = '[SYSTEM] You reported success, but the code did NOT compile. '
+                                + 'Read the compilation error above carefully. '
+                                + 'Use read_file to examine the source file, identify the exact syntax issue, '
+                                + 'then use str_replace to fix only the broken lines. '
+                                + 'Do NOT rewrite the whole file and do NOT claim success until gcc exits without errors.';
+                            await this.messageHandler.send(forcedMsg, false);
+                            iteration++;
+                            continue;
+                        }
+                    }
+                    process.stdout.write(renderMarkdown(displayText, this.agentMode) + '\n');
+                }
             }
             console.log('');
 
@@ -727,6 +741,19 @@ class ChatBot {
             if (m) return m[1];
         }
         return null;
+    }
+    /**
+     * Graceful shutdown: close browser, LSP, subagents, reset terminal.
+     * Safe to call multiple times.
+     */
+    async cleanup() {
+        if (this._cleaningUp) return;
+        this._cleaningUp = true;
+        try {
+            if (this.tools) await this.tools.cleanup();
+            if (this.model?.cleanup) await this.model.cleanup();
+            if (this.subagentManager) this.subagentManager.cleanup();
+        } catch {}
     }
 }
 
