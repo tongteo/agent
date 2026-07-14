@@ -15,10 +15,11 @@ const { autoFixCFile } = require('./core/auto-fix');
 const { startSpinner, stopSpinner, withSigint, createStreamTimeout, hasToolCall, stripToolCalls } = require('./core/stream-utils');
 
 class ChatBot {
-    constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false, enableSubagents = true) {
+    constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false, enableSubagents = true, autoExecute = true) {
         this.apiKey = apiKey;
         this.modelName = model;
         this.agentMode = agentMode;
+        this.autoExecute = autoExecute;
         this.session = new SessionManager();
         this.prompt = new PromptManager();
         this.model = null;
@@ -329,7 +330,8 @@ class ChatBot {
                 if (!lastResponse) break;
                 toolCalls = ToolParser.parse(lastResponse).map(tc => ({ ...tc, id: null }));
                 // Fallback: intent parsing for models that don't follow XML format (e.g. gemini-web)
-                if (toolCalls.length === 0 && this.model.model === 'gemini-web') {
+                // Skip when --no-auto-execute: don't infer compile/run from model text
+                if (toolCalls.length === 0 && this.model.model === 'gemini-web' && this.autoExecute) {
                     const ctx = { lastFile: this._lastMentionedFile(lastResponse) };
                     toolCalls = IntentParser.parse(lastResponse, ctx).map(tc => ({ ...tc, id: null }));
                 }
@@ -534,7 +536,10 @@ class ChatBot {
                     }
                 }
 
-                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\nIf the user's original request needs more steps, continue. Otherwise respond briefly to confirm.`;
+                const feedbackHint = this.autoExecute
+                    ? 'If the user\'s original request needs more steps, continue. Otherwise respond briefly to confirm.'
+                    : 'Respond briefly to confirm what was done. Do NOT auto-run additional commands.';
+                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\n${feedbackHint}`;
                 await this.messageHandler.send(feedback, false);
             }
             

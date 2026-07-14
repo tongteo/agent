@@ -7,7 +7,8 @@ const { closeBrowser } = require('../src/bridges/browser-manager');
 async function main() {
     const args = process.argv.slice(2);
     const agentMode = !args.includes('--chat');
-    const bot = new ChatBot('', '', agentMode);
+    const autoExecute = !args.includes('--no-auto-execute');
+    const bot = new ChatBot('', '', agentMode, true, autoExecute);
     await bot.init();
 
     // Graceful shutdown: close browser + LSP + reset terminal on SIGTERM/SIGINT
