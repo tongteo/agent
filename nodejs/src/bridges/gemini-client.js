@@ -437,7 +437,8 @@ class GeminiClient {
   async _getLatestResponse() {
     return this._page.evaluate(() => {
       const TEMPLATE = new Set([
-        'script','style','template','ng-template','ng-content','ng-container','ng-component'
+        'script','style','template','ng-template','ng-content','ng-container','ng-component',
+        'source-footnote','source-footnote-marker','footnote'
       ]);
       const KNOWN = new Set([
         'a','abbr','address','article','aside','b','bdi','bdo','blockquote','br',

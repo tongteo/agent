@@ -376,6 +376,16 @@ class ChatBot {
                 }
             }
 
+            // When --no-auto-execute: block execute/bash tool calls entirely
+            // (IntentParser is already skipped above, but model may still output them)
+            if (!this.autoExecute) {
+                toolCalls = toolCalls.filter(tc => tc.tool !== 'execute' && tc.tool !== 'bash');
+                if (toolCalls.length === 0) {
+                    this._handledToolCalls = true; // prevent handleCommands fallback
+                    break;
+                }
+            }
+
             if (toolCalls.length === 0) break;
             this._handledToolCalls = true;
 
