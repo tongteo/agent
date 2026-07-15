@@ -1,59 +1,58 @@
-# OpenRouter Agent CLI
+# agent-cli
 
-Terminal-based AI agent with tool integration, LSP support, and Playwright-based web providers (Gemini/Claude). Built with Node.js.
+AI agent CLI — terminal-based agent with tool integration, streaming, diff views, and LSP support.
+
+Connects to any **OpenAI-compatible API** (OpenRouter, OmniRoute, vLLM, Ollama, etc.) via `/v1/chat/completions` with SSE streaming.
+
+## Features
+
+- **Agent mode** — model uses tools (read, write, edit files, run bash, search, etc.)
+- **Chat mode** — plain conversation without tool calls
+- **Streaming** with real-time display + spinner
+- **Diff views** — color-coded syntax-highlighted diffs on file writes
+- **Markdown rendering** — headers, code blocks, tables, inline code, LaTeX
+- **LSP integration** — diagnostics, go-to-definition, hover (optional)
+- **Subagent delegation** — spawn isolated sub-agents for parallel tasks
+- **Auto-fix** — detect C compilation loops and fix common errors
+- **Session persistence** — conversation history survives restarts
 
 ## Quick Start
 
 ```bash
 cd nodejs
 npm install
-npm test       # 181+ tests
-npm start      # launch interactive CLI
-# or: node bin/openrouter
+cp .env.example .env   # set OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+node bin/openrouter
 ```
 
-## Features
-
-- **Chat loop** — interactive or piped (stdin) conversation
-- **Tool execution** — read/write files, run commands, search code, web browsing, file patching, delegation
-- **Provider support**: OpenRouter API (native function calling), Gemini Web & Claude Web (Playwright + CDP)
-- **Skills system** — loadable `.md` skill files with YAML frontmatter; model can list, view, load, search, create, edit, and delete skills at runtime
-- **Subagent delegation** — spawn parallel child agents in isolated contexts
-- **Context management** — token counting with automatic history trimming
-- **LSP integration** — autocomplete, diagnostics, go-to-definition via LSP tools
-- **Session persistence** — working directory and env survive across sessions
-- **Security validator** — flags dangerous commands before execution
-
-## Configuration
-
-Create `nodejs/.env`:
-
-```env
-# OpenRouter (recommended)
-OPENROUTER_API_KEY=sk-...
-
-# Gemini Web (cookie-based)
-GEMINI_COOKIES=1
-
-# Claude Web (cookie-based)
-CLAUDE_COOKIES=1
-```
-
-## Tool Format
+## CLI Options
 
 ```
-<tool>tool_name</tool>
-<params>{"key": "value"}</params>
+node bin/openrouter [options]
+
+  --chat              Chat mode (no tool calls)
+  --no-auto-execute   Don't auto-run compile/exec from model output
+  --model=<name>      Override OPENAI_MODEL
+  --base-url=<url>    Override OPENAI_BASE_URL
+  --api-key=<key>     Override OPENAI_API_KEY
 ```
 
-JSON and natural-language intent parsing as fallbacks.
+## Environment Variables
 
-## Adding a New Tool
+```bash
+OPENAI_API_KEY=sk-...        # Required
+OPENAI_BASE_URL=http://...   # Any OpenAI-compatible endpoint
+OPENAI_MODEL=gpt-4o          # Model name
+```
 
-1. Create `src/core/tools/<name>.js`
-2. Export from `src/core/tools/index.js` (ToolRegistry)
-3. Add tool name to `ToolParser.TOOL_NAMES` in `src/core/agent.js`
-4. Write tests in `tests/test-<name>.js`
+## In-Session Commands
+
+```
+exit              Quit
+clear             Reset conversation + screen
+/model <name>     Switch model
+/think [on|off]   Toggle thinking display
+```
 
 ## Development
 
