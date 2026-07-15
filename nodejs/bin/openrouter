@@ -2,16 +2,23 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env'), quiet: true });
 const { ChatBot } = require('../src/chat-bot');
 
-const { closeBrowser } = require('../src/bridges/browser-manager');
-
 async function main() {
     const args = process.argv.slice(2);
     const agentMode = !args.includes('--chat');
     const autoExecute = !args.includes('--no-auto-execute');
+
+    // Parse --model, --base-url, --api-key CLI args (override env vars)
+    const modelArg = args.find(a => a.startsWith('--model='));
+    const baseUrlArg = args.find(a => a.startsWith('--base-url='));
+    const apiKeyArg = args.find(a => a.startsWith('--api-key='));
+    if (modelArg)     process.env.OPENAI_MODEL     = modelArg.split('=')[1];
+    if (baseUrlArg)   process.env.OPENAI_BASE_URL  = baseUrlArg.split('=')[1];
+    if (apiKeyArg)    process.env.OPENAI_API_KEY    = apiKeyArg.split('=')[1];
+
     const bot = new ChatBot('', '', agentMode, true, autoExecute);
     await bot.init();
 
-    // Graceful shutdown: close browser + LSP + reset terminal on SIGTERM/SIGINT
+    // Graceful shutdown: close LSP + reset terminal on SIGTERM/SIGINT
     const shutdown = async () => {
         process.stdout.write('\n');
         await bot.cleanup();

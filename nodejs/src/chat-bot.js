@@ -9,13 +9,13 @@ const { isDangerous, isInteractive } = require('./commands/validator');
 const { formatOutput, formatMath, renderMarkdown } = require('./ui/formatter');
 const { PromptManager } = require('./ui/prompt');
 const { ToolRegistry } = require('./core/tools');
-const { AgentPrompt, ToolParser, IntentParser } = require('./core/agent');
+const { AgentPrompt, ToolParser } = require('./core/agent');
 const { SubagentManager } = require('./core/subagent');
 const { autoFixCFile } = require('./core/auto-fix');
 const { startSpinner, stopSpinner, withSigint, createStreamTimeout, hasToolCall, stripToolCalls } = require('./core/stream-utils');
 
 class ChatBot {
-    constructor(apiKey, model = 'gemini-2.0-flash-lite', agentMode = false, enableSubagents = true, autoExecute = true) {
+    constructor(apiKey, model = '', agentMode = false, enableSubagents = true, autoExecute = true) {
         this.apiKey = apiKey;
         this.modelName = model;
         this.agentMode = agentMode;
@@ -34,26 +34,24 @@ class ChatBot {
 
     async init() {
         this.session.load();
-        
-        const geminiCookies = process.env.GEMINI_COOKIES;
-        const claudeCookies = process.env.CLAUDE_COOKIES;
-        if (claudeCookies) {
-            const { ClaudeCookiesAdapter } = require('./models/claude-cookies');
-            this.model = new ClaudeCookiesAdapter();
-        } else if (geminiCookies) {
-            const { GeminiCookiesAdapter } = require('./models/gemini-cookies');
-            this.model = new GeminiCookiesAdapter();
+
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (openaiKey) {
+            const { OpenAIAdapter } = require('./models/openai-adapter');
+            this.model = new OpenAIAdapter();
+            // Enable tools for agent mode
+            if (this.agentMode && this.tools) {
+                this.model.enableTools(this.tools.getToolSchemas());
+            }
         } else {
-            throw new Error('No provider configured. Set GEMINI_COOKIES=1 or CLAUDE_COOKIES=1 in .env');
+            throw new Error('No provider configured. Set OPENAI_API_KEY in .env');
         }
         await this.model.init();
 
         const agentPrompt = this.agentMode
             ? (this.model.tools
                 ? 'You are an AI agent. Use the provided tools to complete tasks. After all tasks are done, respond briefly.'
-                : (this.model.model === 'gemini-web' || this.model.model === 'claude-web')
-                    ? AgentPrompt.getCompactPrompt(this.tools)
-                    : AgentPrompt.getSystemPrompt(this.tools))
+                : AgentPrompt.getSystemPrompt(this.tools))
             : null;
         this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt, {
             toolRegistry: this.tools
@@ -150,38 +148,7 @@ class ChatBot {
                 this._abortController = new AbortController();
                 const signal = this._abortController.signal;
 
-                // Clean page state between turns
-                if (this.model?._cleanInterturn) {
-                    await this.model._cleanInterturn();
-                }
-
-                // Pre-flight: if agent mode and user input is a clear action command,
-                // dispatch tool directly without asking Gemini
-                if (this.agentMode && this.model.model === 'gemini-web') {
-                    const directCall = IntentParser.parseUserInput(msg, { lastFile: this._lastWrittenFile });
-                    if (directCall) {
-                        const { tool, params } = directCall;
-                        const label = params.path || params.command || '';
-                        process.stdout.write(`  ${chalk.green('\u2713')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}\n`);
-                        try {
-                            const result = await this.tools.execute(tool, params);
-                            const displayTools = ['execute', 'bash', 'run_command'];
-                            if (displayTools.includes(tool) && result) {
-                                const lines = result.trim().split('\n').slice(0, 20);
-                                console.log(chalk.dim(lines.join('\n')));
-                            }
-                            // Feed result back to model for follow-up
-                            await this.messageHandler.send(`User ran: ${msg}\nResult:\n${result}`, false);
-                        } catch (e) {
-                            process.stdout.write(`  ${chalk.red('\u2717')} ${e.message}\n`);
-                            await this.messageHandler.send(`User ran: ${msg}\nError: ${e.message}`, false);
-                        }
-                    } else {
-                        await this.messageHandler.send(msg);
-                    }
-                } else {
-                    await this.messageHandler.send(msg);
-                }
+                await this.messageHandler.send(msg);
                 
                 // Spinner while waiting
                 const interval = startSpinner();
@@ -329,51 +296,6 @@ class ChatBot {
                 const lastResponse = await this.getLastResponse();
                 if (!lastResponse) break;
                 toolCalls = ToolParser.parse(lastResponse).map(tc => ({ ...tc, id: null }));
-                // Fallback: intent parsing for models that don't follow XML format (e.g. gemini-web)
-                // Skip when --no-auto-execute: don't infer compile/run from model text
-                if (toolCalls.length === 0 && this.model.model === 'gemini-web' && this.autoExecute) {
-                    const ctx = { lastFile: this._lastMentionedFile(lastResponse) };
-                    toolCalls = IntentParser.parse(lastResponse, ctx).map(tc => ({ ...tc, id: null }));
-                }
-                // Fallback: extract code block and write to mentioned file
-                if (toolCalls.length === 0 && this.model.model === 'gemini-web') {
-                    // Broad file name patterns: supports English, Vietnamese, and common formats
-                    const filePatterns = [
-                        /file\s+(?:named?\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-                        /filename\s*[:\s]+[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-                        /tên[:\s]*(?:là\s+)?(?:file)?[:\s]*[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-                        /lưu\s+(?:vào\s+)?(?:file\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-                        /save\s+(?:as\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-                        /(?:^|\s)([\w./]+\.[ch](?:pp)?|\.py|\.js|\.ts|\.go|\.rs|\.java)\s*$/mi
-                    ];
-                    // Code block detection
-                    const codeMatch = lastResponse.match(/```(?:\w+)?\n([\s\S]+?)```/);
-
-                    let fileMatch = null;
-                    for (const pattern of filePatterns) {
-                        const m = lastResponse.match(pattern);
-                        if (m) { fileMatch = m[1]; break; }
-                    }
-
-                    if (fileMatch && codeMatch && codeMatch[1].length > 50) {
-                        toolCalls = [{ tool: 'write_file', params: { path: fileMatch, content: codeMatch[1].trim() }, id: null }];
-                    } else if (!fileMatch && codeMatch && codeMatch[1].length > 100) {
-                        // Code block with no explicit filename — try to detect language and generate name
-                        const langMatch = lastResponse.match(/```(\w+)/);
-                        const extMap = { c: 'c', cpp: 'cpp', python: 'py', javascript: 'js',
-                                        typescript: 'ts', go: 'go', rust: 'rs', java: 'java',
-                                        bash: 'sh', shell: 'sh', ruby: 'rb', php: 'php' };
-                        let ext = 'txt';
-                        if (langMatch && extMap[langMatch[1].toLowerCase()]) {
-                            ext = extMap[langMatch[1].toLowerCase()];
-                        }
-                        // Try to find a tool name in the text to determine action
-                        if (lastResponse.match(/write|tạo|lưu|save|create|code|implement|viết/i)) {
-                            const genName = `output.${ext}`;
-                            toolCalls = [{ tool: 'write_file', params: { path: genName, content: codeMatch[1].trim() }, id: null }];
-                        }
-                    }
-                }
             }
 
             // When --no-auto-execute: block execute/bash tool calls entirely
@@ -446,7 +368,7 @@ class ChatBot {
                     const displayTools = ['execute', 'bash', 'tree', 'git', 'analyze_code', 'debug_trace'];
                     if (displayTools.includes(tool) && result && !result.startsWith('Error:')) {
                         const lines = result.trim().split('\n').slice(0, 20);
-                        console.log(chalk.dim(lines.join('\n')));
+                        process.stdout.write(chalk.dim(lines.join('\n')) + '\n');
                     }
 
                     // Display code view for file-write tools (DiffFormatter output)
@@ -740,25 +662,7 @@ class ChatBot {
     }
 
     /**
-     * Extract mentioned file from text using broad patterns.
-     * @param {string} text - Model response text
-     * @returns {string|null} Last mentioned file path or null
-     */
-    _lastMentionedFile(text) {
-        if (!text) return null;
-        const patterns = [
-            /[`'"]?([\w./]+\.\w+)[`'"]?/i,
-            /file\s+(?:named?\s+)?[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i,
-            /filename\s*[:\s]+[`'"]?([\w./]+\.[a-zA-Z]\w*)[`'"]?/i
-        ];
-        for (const pattern of patterns) {
-            const m = text.match(pattern);
-            if (m) return m[1];
-        }
-        return null;
-    }
-    /**
-     * Graceful shutdown: close browser, LSP, subagents, reset terminal.
+     * Graceful shutdown: close LSP, subagents, reset terminal.
      * Safe to call multiple times.
      */
     async cleanup() {

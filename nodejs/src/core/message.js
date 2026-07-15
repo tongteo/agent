@@ -44,14 +44,6 @@ class MessageHandler {
         const cwd = this.session.workingDir || process.cwd();
         let prompt = this.agentPrompt;
 
-        // Dynamically inject loaded skills into the system prompt
-        if (this.toolRegistry && this.toolRegistry.skillManager) {
-            const skillsAddon = this.toolRegistry.skillManager.getLoadedPromptAdditions();
-            if (skillsAddon) {
-                prompt += skillsAddon;
-            }
-        }
-
         return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n\n${prompt}`;
     }
 

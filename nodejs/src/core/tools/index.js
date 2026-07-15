@@ -2,9 +2,9 @@
  * @fileoverview ToolRegistry — central registry for all agent tools.
  *
  * Manages tool registration, execution, LSP lifecycle, and subagent delegation.
- * Composed from focused sub-modules (file-ops, lsp-tools, misc-tools, subagent-tools, skills-tools).
+ * Composed from focused sub-modules (file-ops, lsp-tools, misc-tools, subagent-tools).
  *
- * Tool registration supports an optional 3rd argument (group, e.g. 'skills', 'files')
+ * Tool registration supports an optional 3rd argument (group, e.g. 'files', 'lsp')
  * and an optional 4th argument (paramSchema), enabling getToolSchemas() to produce
  * accurate OpenAI-compatible JSON schemas for function-calling models.
  */
@@ -13,7 +13,6 @@ const fs = require('fs');
 const path = require('path');
 const { LSPClient } = require('../lsp');
 const { DiffFormatter } = require('../../ui/diff');
-const { SkillManager } = require('../skills');
 const {
     sanitizeToolOutput,
     commandExists,
@@ -23,7 +22,6 @@ const { registerFileOps } = require('./file-ops');
 const { registerLSPTools } = require('./lsp-tools');
 const { registerMiscTools } = require('./misc-tools');
 const { registerSubagentTools } = require('./subagent-tools');
-const { registerSkillsTools } = require('./skills-tools');
 const { ToolParser } = require('../agent');
 
 class ToolRegistry {
@@ -39,10 +37,6 @@ class ToolRegistry {
         this.lspClients = new Map();
         /** @type {import('../session').SessionManager} */
         this.session = session;
-        /** @type {import('../skills').SkillManager} */
-        this.skillManager = new SkillManager(
-            path.join(process.cwd(), 'skills')
-        );
         /** @type {import('./subagent-tools').SubagentManager|null} */
         this.subagentManager = null;
         this.registerDefaultTools();
@@ -199,7 +193,6 @@ class ToolRegistry {
         registerLSPTools(this);
         registerMiscTools(this);
         registerSubagentTools(this);
-        registerSkillsTools(this, this.skillManager);
         // Sync tool names to ToolParser for JSON-format detection
         ToolParser.syncToolNames(this);
     }

@@ -13,45 +13,6 @@ function getOSContext() {
 }
 
 class AgentPrompt {
-    static loadedSkillsPrompt = '';
-
-    static getCompactPrompt(toolRegistry) {
-        const priority = ['read_file', 'write_file', 'str_replace', 'list_dir', 'find_files', 'bash', 'execute', 'grep', 'append', 'read_lines', 'delete_file', 'use_subagent'];
-        const allTools = toolRegistry.getToolList().split('\n');
-        const tools = [
-            ...priority.map(p => allTools.find(t => t.startsWith(`- ${p}:`))).filter(Boolean),
-            ...allTools.filter(t => !priority.some(p => t.startsWith(`- ${p}:`)))
-        ].slice(0, 14).join('\n');
-        return `${getOSContext()}
-You are a terminal agent running on the user's local machine with full filesystem and shell access via the tools below. You are NOT a web chatbot — you have real, working tool integrations. Always use a tool to act; only reply in plain text when no action is needed.
-
-Tools available:
-${tools}
-
-Response format — emit exactly this, no markdown fences, no prose before the tag:
-<tool>NAME</tool>
-<params>{"key":"value"}</params>
-
-Examples:
-User: list files
-<tool>list_dir</tool>
-<params>{"path":"."}</params>
-
-User: read main.c
-<tool>read_file</tool>
-<params>{"path":"main.c"}</params>
-
-User: write sort.c
-<tool>write_file</tool>
-<params>{"path":"sort.c","content":"#include <stdio.h>"}</params>
-
-User: run tests
-<tool>bash</tool>
-<params>{"command":"npm test"}</params>
-
-IMPORTANT: To create or write to files, always use the write_file tool — never use bash heredoc (cat << EOF). write_file handles multi-line content reliably and works in all modes.${AgentPrompt.loadedSkillsPrompt}`;
-    }
-
     static getSystemPrompt(toolRegistry) {
         return `[System Configuration]
 
@@ -70,17 +31,13 @@ You are an AI agent with tool integration capabilities. Use the provided tools t
 <tool>tool_name</tool>
 <params>{"key": "value"}</params>
 
-## Skills System (Self-Improvement)
-- skills_list, skill_view, skill_load, skill_search, skill_manage
-When you discover a reusable pattern or workflow, create a skill.
-
 ## Error Recovery
 When a tool returns an error: READ the error, understand what went wrong. Never repeat the same failing call more than 1 time. If stuck after 3 attempts, try a different approach.
 
 Available tools:
 ${toolRegistry.getToolList()}
 
-Note: Use str_replace for modifications, write_file only for new files.${AgentPrompt.loadedSkillsPrompt}`;
+Note: Use str_replace for modifications, write_file only for new files.`;
     }
 }
 
@@ -89,8 +46,7 @@ class ToolParser {
         if (this._toolNames && this._toolNames.length > 0) return this._toolNames;
         return ['write_file', 'read_file', 'list_dir', 'str_replace', 'execute', 'bash',
                 'grep', 'find_files', 'append', 'read_lines', 'delete_file', 'tree', 'git',
-                'internet_search', 'analyze_code', 'package_install', 'debug_trace', 'use_subagent',
-                'skills_list', 'skill_view', 'skill_load', 'skill_search', 'skill_manage'];
+                'internet_search', 'analyze_code', 'package_install', 'debug_trace', 'use_subagent'];
     }
 
     static syncToolNames(toolRegistry) {

@@ -123,7 +123,7 @@ function renderTableRow(rest) {
 }
 
 /**
- * Render full markdown response with syntax highlighting.
+ * Render a full markdown response with syntax highlighting and proper spacing.
  * Handles code blocks, bold, inline code, headings, LaTeX, tables.
  * @param {string} text - Markdown text
  * @param {boolean} [agentMode=false] - Whether in agent mode (truncates code blocks)
@@ -135,6 +135,8 @@ function renderMarkdown(text, agentMode = false) {
     let inCode = false;
     let lang = '';
     let codeLines = [];
+    let prevWasEmpty = false;
+    let prevWasCode = false;
 
     for (const line of lines) {
         const fence = line.match(/^```(\w*)$/);
@@ -155,13 +157,27 @@ function renderMarkdown(text, agentMode = false) {
             const shown = bodyLines.slice(0, MAX);
             const hidden = bodyLines.length - MAX;
             const rendered = shown.map(l => chalk.dim('│ ') + l).join('\n')
-                + (agentMode && hidden > 0 ? '\n' + chalk.dim('│ ') + chalk.yellow(`... (${hidden} more lines)`) : '');
+                + (agentMode && hidden > 0 ? '\n' + chalk.dim('│ ') + chalk.yellow(`... ${hidden} more lines`) : '');
+            // Ensure blank line before code block
+            if (out.length > 0 && !prevWasEmpty && !prevWasCode) {
+                out.push('');
+            }
             out.push(header);
             out.push(rendered);
             inCode = false;
+            prevWasCode = true;
+            prevWasEmpty = false;
             continue;
         }
         if (inCode) { codeLines.push(line); continue; }
+
+        const isEmpty = line.trim() === '';
+
+        // Headers: ensure blank line before
+        const isHeader = /^#{1,4}\s/.test(line);
+        if (isHeader && out.length > 0 && !prevWasEmpty) {
+            out.push('');
+        }
 
         // Inline formatting
         const formatted = line
@@ -172,7 +188,10 @@ function renderMarkdown(text, agentMode = false) {
             .replace(/\$([^$\n]+)\$/g, (_, t) => chalk.yellow(renderLatex(t)))
             .replace(/^---+$/, chalk.dim('─'.repeat(40)))
             .replace(/^\|\s*(.+)/, (_, t) => renderTableRow(t));
+
         out.push(formatted);
+        prevWasEmpty = isEmpty;
+        prevWasCode = false;
     }
 
     // Flush unclosed code block
