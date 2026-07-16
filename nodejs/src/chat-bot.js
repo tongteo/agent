@@ -336,7 +336,7 @@ class ChatBot {
         return result;
     }
 
-    async handleToolCalls(maxIterations = 50) {
+    async handleToolCalls(maxIterations = 200) {
         let iteration = 0;
         /** Track repeated tool+params to detect loops */
         const failureCache = new Map();
@@ -627,7 +627,7 @@ class ChatBot {
             this._handledToolCalls = false;
             return;
         }
-        const maxIterations = 50;
+        const maxIterations = 200;
         let iteration = 0;
 
         while (iteration < maxIterations) {
