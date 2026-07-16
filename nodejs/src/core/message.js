@@ -13,7 +13,7 @@ const { ContextManager } = require('./context-manager');
 const { AgentPrompt } = require('./agent');
 
 /** Token threshold to trigger summarization (fraction of maxTokens) */
-const SUMMARIZE_THRESHOLD = 0.65;
+const SUMMARIZE_THRESHOLD = 0.80;
 /** Max recent messages to preserve after summarization */
 const PRESERVE_RECENT = 4;
 
@@ -23,7 +23,7 @@ class MessageHandler {
      * @param {import('./session').SessionManager} session - Session manager
      * @param {string|null} agentPrompt - Agent system prompt (null for chat-only mode)
      * @param {Object} [options] - Configuration options
-     * @param {number} [options.maxTokens=32000] - Max context tokens
+     * @param {number} [options.maxTokens=1000000] - Max context tokens
      * @param {boolean} [options.autoTrim=true] - Auto-trim history when near limit
      * @param {Object} [options.toolRegistry] - ToolRegistry reference (for dynamic skill injection)
      */
@@ -37,7 +37,7 @@ class MessageHandler {
         /** @type {Object|undefined} */
         this.toolRegistry = options.toolRegistry;
         /** @type {ContextManager} */
-        this.contextManager = new ContextManager({ maxTokens: options.maxTokens || 32000 });
+        this.contextManager = new ContextManager({ maxTokens: options.maxTokens || 1000000 });
         /** @type {boolean} */
         this.autoTrim = options.autoTrim !== false;
     }

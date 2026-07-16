@@ -13,13 +13,13 @@ const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
 class ContextManager {
     /**
      * @param {Object} [options] - Configuration options
-     * @param {number} [options.maxTokens=32000] - Maximum token limit
+     * @param {number} [options.maxTokens=1000000] - Maximum token limit
      * @param {number} [options.warningThreshold=0.75] - Fraction of maxTokens to trigger trimming
      * @param {number} [options.trimTarget=0.5] - Target fraction to trim down to
      * @param {number} [options.reserveTokens=1000] - Reserved tokens for system prompt + tool results
      */
     constructor(options = {}) {
-        this.maxTokens = options.maxTokens || 32000;
+        this.maxTokens = options.maxTokens || 1000000;
         this.warningThreshold = options.warningThreshold || 0.75;
         this.trimTarget = options.trimTarget || 0.5;
         this.reserveTokens = options.reserveTokens || 1000;
