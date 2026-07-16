@@ -7,6 +7,8 @@
  */
 
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
 const { ContextManager } = require('./context-manager');
 const { AgentPrompt } = require('./agent');
 
@@ -47,9 +49,35 @@ class MessageHandler {
     getSystemContext() {
         if (!this.agentPrompt) return null;
         const cwd = this.session.workingDir || process.cwd();
+        const projectInstructions = this._loadProjectInstructions(cwd);
         let prompt = this.agentPrompt;
 
+        if (projectInstructions) {
+            prompt = projectInstructions + `\n\n---\n\n` + prompt;
+        }
+
         return `[SYSTEM: OS=${os.platform()}, User=${os.userInfo().username}, Dir=${cwd}]\n\n${prompt}`;
+    }
+
+    /**
+     * Load project-level instruction files from the working directory.
+     * Looks for CLAUDE.md first, then AGENTS.md.
+     * @param {string} cwd - Working directory
+     * @returns {string|null} File content or null if not found
+     * @private
+     */
+    _loadProjectInstructions(cwd) {
+        const candidates = ['CLAUDE.md', 'AGENTS.md'];
+        for (const name of candidates) {
+            const filePath = path.join(cwd, name);
+            try {
+                if (fs.existsSync(filePath)) {
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    if (content.trim()) return content;
+                }
+            } catch { /* ignore read errors */ }
+        }
+        return null;
     }
 
     /**

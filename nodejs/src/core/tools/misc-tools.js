@@ -282,7 +282,7 @@ function registerMiscTools(registry) {
         'Show debug trace with context. Params: {"file": "app.js", "line": 42}'
     );
 
-    // Cache fetch import for internet_search
+    // Cache fetch import for internet_search and web_extract
     let _fetch;
     async function getFetch() {
         if (!_fetch) {
@@ -292,29 +292,217 @@ function registerMiscTools(registry) {
         return _fetch;
     }
 
+    // --- SearXNG fallback chain ---
+    const SEARXNG_ENDPOINTS = [
+        'https://searx.nousresearch.com',
+        'https://search.sapti.me',
+        'https://searx.be',
+        'https://search.inetol.net',
+    ];
+
+    /**
+     * Try SearXNG search across multiple endpoints with fallback.
+     * @param {string} query - Search query
+     * @param {Object} [opts] - Options: language, category, maxResults
+     * @returns {Promise<Object|null>} SearXNG JSON response or null
+     */
+    async function searchSearxNG(query, opts = {}) {
+        const fetch = await getFetch();
+        const { language = '', category = '', maxResults = 10 } = opts;
+        const params = new URLSearchParams({
+            q: query,
+            format: 'json',
+            pageno: '1',
+        });
+        if (language) params.set('language', language);
+        if (category) params.set('categories', category);
+
+        for (const endpoint of SEARXNG_ENDPOINTS) {
+            try {
+                const url = `${endpoint}/search?${params.toString()}`;
+                const res = await fetch(url, {
+                    headers: { 'User-Agent': 'agent-cli/2.0' },
+                    signal: AbortSignal.timeout(8000),
+                });
+                if (!res.ok) continue;
+                const data = await res.json();
+                if (data.results?.length) {
+                    data._endpoint = endpoint;
+                    return data;
+                }
+            } catch {
+                // Try next endpoint
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Strip HTML tags and decode entities for clean text.
+     * @param {string} html - Raw HTML string
+     * @returns {string} Plain text
+     */
+    function stripHtml(html) {
+        if (!html) return '';
+        return html
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&#x27;/g, "'")
+            .replace(/&#x2F;/g, '/')
+            .replace(/&\w+;/g, '')
+            .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code))
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    /**
+     * Search DuckDuckGo lite (HTML fallback when all SearXNG endpoints fail).
+     * Parses the minimal HTML to extract titles, URLs, and snippets.
+     * @param {string} query - Search query
+     * @param {number} maxResults - Max results
+     * @returns {Promise<Object|null>} Normalized results or null
+     */
+    async function searchDuckDuckGoLite(query, maxResults = 10) {
+        const fetch = await getFetch();
+        try {
+            const res = await fetch('https://lite.duckduckgo.com/lite/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0 (compatible; agent-cli/2.0)',
+                },
+                body: new URLSearchParams({ q: query }).toString(),
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!res.ok) return null;
+            const html = await res.text();
+            // DuckDuckGo lite uses <a class="result-link" href="...">title</a> and <td class="result-snippet">snippet</td>
+            const results = [];
+            // DDG lite puts href before class — handle both orders
+            const linkRegex = /<a[^>]+href=['"]([^'"]*)['"][^>]+class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/gi;
+            const snippetRegex = /<td[^>]+class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi;
+            const links = [];
+            const snippets = [];
+            let m;
+            while ((m = linkRegex.exec(html)) !== null) {
+                links.push({ url: m[1], title: stripHtml(m[2]) });
+            }
+            while ((m = snippetRegex.exec(html)) !== null) {
+                snippets.push(stripHtml(m[1]));
+            }
+            for (let i = 0; i < links.length && results.length < maxResults; i++) {
+                results.push({
+                    title: links[i].title,
+                    url: links[i].url,
+                    content: snippets[i] || '',
+                });
+            }
+            if (results.length === 0) return null;
+            return { results, _endpoint: 'lite.duckduckgo.com' };
+        } catch {
+            return null;
+        }
+    }
+
     // --- Internet search ---
     registry.register('internet_search',
-        async ({ query }) => {
+        async ({ query, language = '', category = '', max_results = 10 }) => {
             try {
-                const fetch = await getFetch();
-                const res = await fetch(
-                    `https://searx.nousresearch.com/search?q=${encodeURIComponent(query)}&format=json`,
-                    {
-                        headers: { 'User-Agent': 'agent-cli/1.0' },
-                        signal: AbortSignal.timeout(10000)
-                    }
-                );
-                if (!res.ok) return `Search unavailable (HTTP ${res.status})`;
-                const data = await res.json();
-                if (!data.results?.length) return 'No results found.';
-                return data.results.slice(0, 5).map((r, i) =>
-                    `${i + 1}. ${r.title}\n   ${r.url}\n   ${(r.content || '').slice(0, 200)}`
-                ).join('\n');
+                // Try SearXNG first
+                let data = await searchSearxNG(query, { language, category, maxResults: max_results });
+                // Fallback to DuckDuckGo lite
+                if (!data || !data.results?.length) {
+                    data = await searchDuckDuckGoLite(query, max_results);
+                }
+                if (!data || !data.results?.length) return 'No results found. Try rephrasing your query.';
+                const limit = Math.min(data.results.length, max_results);
+                const results = data.results.slice(0, limit).map((r, i) => {
+                    const snippet = (r.content || '').slice(0, 500);
+                    return `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${snippet}`;
+                });
+                const source = data._endpoint ? ` (via ${data._endpoint})` : '';
+                return `Found ${data.results.length} results${source}:\n\n${results.join('\n\n')}`;
             } catch (e) {
                 return `Search error: ${e.message}`;
             }
         },
-        'Search internet. Params: {"query": "latest AI news"}'
+        'Search the internet. Returns titles, URLs, and snippets. Params: {"query": "latest AI news", "language": "en", "category": "general", "max_results": 10}',
+        'web',
+        {
+            description: 'Search the internet. Returns titles, URLs, and snippets.',
+            properties: {
+                query: { type: 'string', description: 'Search query' },
+                language: { type: 'string', description: 'Language code (e.g. "en", "vi", "ja"). Default: auto' },
+                category: { type: 'string', description: 'Category: general, images, news, science, it. Default: general' },
+                max_results: { type: 'number', description: 'Max results to return (1-20). Default: 10' }
+            },
+            required: ['query']
+        }
+    );
+
+    // --- Web extract (read page content) ---
+    registry.register('web_extract',
+        async ({ url, max_length = 3000 }) => {
+            try {
+                const fetch = await getFetch();
+                // Use jina.ai reader API for clean text extraction (no JS rendering needed)
+                const readerUrl = `https://r.jina.ai/${url}`;
+                const res = await fetch(readerUrl, {
+                    headers: {
+                        'User-Agent': 'agent-cli/2.0',
+                        'Accept': 'text/plain',
+                        'X-Return-Format': 'text',
+                    },
+                    signal: AbortSignal.timeout(15000),
+                    redirect: 'follow',
+                });
+                if (!res.ok) {
+                    // Fallback: fetch raw HTML and strip tags
+                    const rawRes = await fetch(url, {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; agent-cli/2.0)' },
+                        signal: AbortSignal.timeout(10000),
+                        redirect: 'follow',
+                    });
+                    if (!rawRes.ok) return `Error: Could not fetch URL (HTTP ${rawRes.status})`;
+                    const contentType = rawRes.headers.get('content-type') || '';
+                    if (!contentType.includes('text') && !contentType.includes('html')) {
+                        return `Error: URL returns non-text content (${contentType})`;
+                    }
+                    const html = await rawRes.text();
+                    const text = stripHtml(html);
+                    if (!text) return 'Error: Page returned empty content';
+                    const truncated = text.length > max_length
+                        ? text.slice(0, max_length) + `\n\n[... truncated at ${max_length} chars]`
+                        : text;
+                    return truncated;
+                }
+                const text = await res.text();
+                if (!text.trim()) return 'Error: Page returned empty content';
+                const truncated = text.length > max_length
+                    ? text.slice(0, max_length) + `\n\n[... truncated at ${max_length} chars]`
+                    : text;
+                return truncated;
+            } catch (e) {
+                return `Error extracting page: ${e.message}`;
+            }
+        },
+        'Read and extract text content from a URL. Params: {"url": "https://example.com", "max_length": 3000}',
+        'web',
+        {
+            description: 'Read and extract text content from a web page URL. Use after internet_search to get full article content.',
+            properties: {
+                url: { type: 'string', description: 'URL to extract content from' },
+                max_length: { type: 'number', description: 'Max characters to return. Default: 3000' }
+            },
+            required: ['url']
+        }
     );
 }
 

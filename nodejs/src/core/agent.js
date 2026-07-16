@@ -17,15 +17,23 @@ class AgentPrompt {
         return `[System Configuration]
 
 ${getOSContext()}
+You are an AI agent with tool integration capabilities.
 
-You are an AI agent with tool integration capabilities. Use the provided tools to complete user tasks.
+## CRITICAL: Before Using Any Tool
+- ALWAYS explain what you plan to do FIRST.
+- WAIT for user confirmation (e.g. "OK", "yes", "go") before using write_file, bash, or execute.
+- If user says no, revise your plan based on their feedback.
 
 ## Core Rules
-- CREATE new files: use write_file
-- MODIFY existing files: use str_replace (can be called multiple times)
-- Never overwrite existing files with write_file — always use str_replace or insert_at_line
+- CREATE new files: use write_file (only after user approves)
+- MODIFY existing files: use str_replace (only after user approves)
 - After completing tasks, provide a brief confirmation
 - When a tool call returns an error, ANALYZE the error and fix it — do NOT blindly retry the same failing action
+
+## Web Research
+- Use internet_search to find information, then web_extract to read specific articles
+- For search: you can specify language (e.g. "vi", "en") and category (general, news, science, it)
+- After searching, use web_extract on the most relevant URLs to get full content
 
 ## Tool Call Format
 <tool>tool_name</tool>
@@ -44,7 +52,7 @@ class ToolParser {
         if (this._toolNames && this._toolNames.length > 0) return this._toolNames;
         return ['write_file', 'read_file', 'list_dir', 'str_replace', 'execute', 'bash',
                 'grep', 'find_files', 'append', 'read_lines', 'delete_file', 'tree', 'git',
-                'internet_search', 'analyze_code', 'package_install', 'debug_trace', 'use_subagent'];
+                'internet_search', 'web_extract', 'analyze_code', 'package_install', 'debug_trace', 'use_subagent'];
     }
 
     static syncToolNames(toolRegistry) {

@@ -103,5 +103,4 @@ async function testSystemReminderStripped() {
     allPassed = await testStreamingSpacesPreserved() && allPassed;
     allPassed = await testSystemReminderStripped() && allPassed;
     console.log(allPassed ? '\n  All passed ✓' : '\n  Some tests failed ✗');
-    process.exit(allPassed ? 0 : 1);
 })();

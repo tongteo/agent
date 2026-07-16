@@ -1,6 +1,7 @@
 const chalk = require('chalk');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { SessionManager } = require('./core/session');
 const { MessageHandler } = require('./core/message');
 const { CommandExecutor } = require('./commands/executor');
@@ -15,11 +16,12 @@ const { autoFixCFile } = require('./core/auto-fix');
 const { startSpinner, stopSpinner, withSigint, createStreamTimeout, hasToolCall, stripToolCalls } = require('./core/stream-utils');
 
 class ChatBot {
-    constructor(apiKey, model = '', agentMode = false, enableSubagents = true, autoExecute = true) {
+    constructor(apiKey, model = '', agentMode = false, enableSubagents = true, autoExecute = true, confirmBeforeTool = true) {
         this.apiKey = apiKey;
         this.modelName = model;
         this.agentMode = agentMode;
         this.autoExecute = autoExecute;
+        this.confirmBeforeTool = confirmBeforeTool;
         this.session = new SessionManager();
         this.prompt = new PromptManager();
         this.model = null;
@@ -50,7 +52,7 @@ class ChatBot {
 
         const agentPrompt = this.agentMode
             ? (this.model.tools
-                ? 'You are an AI agent. Use the provided tools to complete tasks. After all tasks are done, respond briefly.'
+                ? 'You are an AI agent. CRITICAL: Before using ANY tool (write_file, bash, execute, etc.), ALWAYS explain your plan first and WAIT for user confirmation (e.g. "OK", "yes", "go"). Do NOT write files or run commands without explicit approval. After all tasks are done, respond briefly.'
                 : AgentPrompt.getSystemPrompt(this.tools))
             : null;
         this.messageHandler = new MessageHandler(this.model, this.session, agentPrompt, {
@@ -311,6 +313,15 @@ class ChatBot {
             const preview = result.split('\n').slice(0, 3).join(' ');
             return `[read_file: ${params.path || '?'} — ${lines} lines]\nPreview: ${preview.slice(0, 300)}\n(Use read_file offset/limit for specific sections)`;
         }
+        // web_extract: keep URL + first 800 chars of content
+        if (tool === 'web_extract') {
+            const preview = result.slice(0, 800);
+            return `[web_extract: ${params.url || '?'}]\n${preview}${result.length > 800 ? '\n...(truncated)' : ''}`;
+        }
+        // internet_search: keep full (already compact)
+        if (tool === 'internet_search') {
+            return result.length > 2000 ? result.substring(0, 2000) + '...' : result;
+        }
         // list_dir / tree: keep compact
         if (tool === 'list_dir' || tool === 'tree') {
             return result.length > 800 ? result.substring(0, 800) + '...' : result;
@@ -390,6 +401,25 @@ class ChatBot {
 
             if (toolCalls.length === 0) break;
             this._handledToolCalls = true;
+
+            // Confirmation step: ask user before executing write/bash/execute tools
+            if (this.confirmBeforeTool) {
+                const confirmTools = toolCalls.filter(tc => 
+                    ['write_file', 'str_replace', 'bash', 'execute'].includes(tc.tool)
+                );
+                if (confirmTools.length > 0) {
+                    const summary = confirmTools.map(tc => {
+                        const label = tc.params.path || tc.params.command || '';
+                        return `  - ${tc.tool}${label ? ' ' + label : ''}`;
+                    }).join('\n');
+                    process.stdout.write(chalk.yellow(`\n  Tools to execute:\n${summary}\n`));
+                    const answer = await this._askConfirmation('  Proceed? [Y/n] ');
+                    if (answer === 'n' || answer === 'N' || answer === 'no') {
+                        process.stdout.write(chalk.dim('  Skipped.\n'));
+                        break;
+                    }
+                }
+            }
 
             const results = [];
             // Sequential execution — avoids race conditions where a tool
@@ -746,6 +776,21 @@ class ChatBot {
             '/think on',
             '/think off'
         ];
+    }
+
+    /**
+     * Ask user for Y/N confirmation via readline.
+     * @param {string} prompt - Prompt to display
+     * @returns {Promise<string>} User's response (lowercase)
+     */
+    _askConfirmation(prompt) {
+        return new Promise(resolve => {
+            const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+            rl.question(prompt, answer => {
+                rl.close();
+                resolve(answer.trim().toLowerCase() || 'y');
+            });
+        });
     }
 
     /**

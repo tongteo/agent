@@ -13,7 +13,7 @@
  *   OPENAI_MODEL     — Model name, defaults to gpt-4o-mini
  */
 
-const fetch = require('node-fetch');
+const _fetch = require('node-fetch');
 const { KVCache } = require('../core/kv-cache');
 
 /** Transient network errors worth retrying. */
@@ -84,6 +84,9 @@ class OpenAIAdapter {
     /** Max retries for transient fetch errors */
     this._maxRetries = opts.maxRetries ?? 3;
 
+    /** Injectable fetch for testing (defaults to node-fetch) */
+    this._fetch = opts.fetch || _fetch;
+
     // ── Response-level KV cache ──
     this._cacheEnabled = opts.cacheEnabled !== false;
     /** @type {KVCache|null} */
@@ -105,7 +108,7 @@ class OpenAIAdapter {
   async init() {
     // Verify connectivity (lightweight models listing check)
     try {
-      const res = await fetch(`${this.baseUrl}/models`, {
+      const res = await this._fetch(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(8000),
       });
@@ -228,7 +231,7 @@ class OpenAIAdapter {
 
       let res;
       try {
-        res = await fetch(`${this.baseUrl}/chat/completions`, {
+        res = await this._fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -298,6 +301,7 @@ class OpenAIAdapter {
     let buffer = '';
     let fullText = '';
     const toolCallMap = new Map();
+    let sawDataEvent = false;
 
     for await (const chunk of reader) {
       buffer += chunk.toString();
@@ -308,6 +312,7 @@ class OpenAIAdapter {
         buffer = buffer.slice(nlIdx + 1);
 
         if (line.startsWith('data: ')) {
+          sawDataEvent = true;
           const data = line.slice(6);
           if (data === '[DONE]') break;
 
@@ -344,6 +349,24 @@ class OpenAIAdapter {
           }
         }
       }
+    }
+
+    // Detect non-SSE response body (e.g. JSON error wrapped in HTTP 200).
+    // When the entire body is consumed and no SSE data events were found,
+    // the body was likely a plain JSON error. Parse and surface it.
+    if (!sawDataEvent) {
+      const bodyText = (buffer || '').trim();
+      if (bodyText) {
+        let errPayload;
+        try { errPayload = JSON.parse(bodyText); } catch {}
+        if (errPayload?.error) {
+          const errMsg = typeof errPayload.error === 'string'
+            ? errPayload.error
+            : errPayload.error.message || JSON.stringify(errPayload.error);
+          throw new Error(`API error (non-SSE response): ${errMsg}`);
+        }
+      }
+      throw new Error('Empty response from API — no SSE data received. Check model status.');
     }
 
     // Cache pure text responses

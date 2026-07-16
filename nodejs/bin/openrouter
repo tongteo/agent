@@ -6,6 +6,7 @@ async function main() {
     const args = process.argv.slice(2);
     const agentMode = !args.includes('--chat');
     const autoExecute = !args.includes('--no-auto-execute');
+    const confirmBeforeTool = !args.includes('--no-confirm');
 
     // Parse --model, --base-url, --api-key CLI args (override env vars)
     const modelArg = args.find(a => a.startsWith('--model='));
@@ -15,7 +16,7 @@ async function main() {
     if (baseUrlArg)   process.env.OPENAI_BASE_URL  = baseUrlArg.split('=')[1];
     if (apiKeyArg)    process.env.OPENAI_API_KEY    = apiKeyArg.split('=')[1];
 
-    const bot = new ChatBot('', '', agentMode, true, autoExecute);
+    const bot = new ChatBot('', '', agentMode, true, autoExecute, confirmBeforeTool);
     await bot.init();
 
     // Graceful shutdown: close LSP + reset terminal on SIGTERM/SIGINT
