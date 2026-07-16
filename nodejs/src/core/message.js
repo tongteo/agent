@@ -3,12 +3,17 @@
  * message history, and streaming response from the model.
  *
  * Integrates with ContextManager for automatic history trimming when token
- * limits are approached.
+ * limits are approached. Supports conversation summarization for long agent loops.
  */
 
 const os = require('os');
 const { ContextManager } = require('./context-manager');
 const { AgentPrompt } = require('./agent');
+
+/** Token threshold to trigger summarization (fraction of maxTokens) */
+const SUMMARIZE_THRESHOLD = 0.65;
+/** Max recent messages to preserve after summarization */
+const PRESERVE_RECENT = 4;
 
 class MessageHandler {
     /**
@@ -62,7 +67,17 @@ class MessageHandler {
         }
         if (message !== null) this.model.messages.push({ role: 'user', content: message });
 
-        // Auto-trim if approaching token limit
+        // Try summarization before trimming — preserves more context
+        if (this.autoTrim && this.model.messages.length > 6) {
+            const totalTokens = this.contextManager.countMessages(this.model.messages);
+            const threshold = this.contextManager.maxTokens * SUMMARIZE_THRESHOLD;
+            if (totalTokens > threshold) {
+                const summarized = await this._summarizeConversation();
+                if (summarized) return; // summarization handled context reduction
+            }
+        }
+
+        // Fallback: auto-trim if approaching token limit
         if (this.autoTrim && this.model.messages.length > 4) {
             const { trimmed, messages, stats } = this.contextManager.trimHistory(this.model.messages);
             if (trimmed) {
@@ -72,6 +87,81 @@ class MessageHandler {
                 }
             }
         }
+    }
+
+    /**
+     * Summarize the conversation by calling the model with a summarization prompt.
+     * Replaces old messages with a compact summary, preserving system prompt and recent messages.
+     * @returns {Promise<boolean>} true if summarization succeeded
+     * @private
+     */
+    async _summarizeConversation() {
+        const msgs = this.model.messages;
+        const sysIdx = msgs.findIndex(m => m.role === 'system');
+        const sysMsg = sysIdx >= 0 ? msgs[sysIdx] : null;
+
+        // Need at least system + 4 messages to summarize
+        if (msgs.length < 6) return false;
+
+        // Build summarization prompt
+        const toSummarize = sysIdx >= 0
+            ? msgs.filter((_, i) => i !== sysIdx)
+            : [...msgs];
+        const conversationText = toSummarize.map(m => {
+            const role = m.role.charAt(0).toUpperCase() + m.role.slice(1);
+            const content = m.content || '';
+            return `[${role}]: ${content.substring(0, 300)}`;
+        }).join('\n');
+
+        const summaryPrompt = `Summarize this conversation concisely in under 200 tokens. Focus on:
+- What the user asked/attempted
+- What tools were used and their results
+- What was accomplished vs what remains
+- Any errors encountered and their status
+
+Conversation:
+${conversationText}
+
+Summary:`;
+
+        // Save current messages, set summarization context
+        const savedMessages = [...msgs];
+        this.model.messages = [{ role: 'user', content: summaryPrompt }];
+
+        let summary = '';
+        try {
+            for await (const chunk of this.model.streamMessage()) {
+                summary += chunk;
+            }
+        } catch (e) {
+            // Summarization failed — restore original messages
+            this.model.messages = savedMessages;
+            console.error(`[Context] Summarization failed: ${e.message}`);
+            return false;
+        }
+
+        // Clean up: remove the summarization messages
+        this.model.messages = [];
+
+        // Restore: system prompt + summary + recent messages
+        if (sysMsg) this.model.messages.push(sysMsg);
+        this.model.messages.push({
+            role: 'user',
+            content: `[Conversation Summary]\n${summary.trim()}\n\n(Recent messages follow below)`
+        });
+
+        // Preserve last N messages (excluding system)
+        const recentStart = Math.max(0, msgs.length - PRESERVE_RECENT);
+        for (let i = recentStart; i < msgs.length; i++) {
+            if (msgs[i].role === 'system') continue;
+            this.model.messages.push(msgs[i]);
+        }
+
+        const afterTokens = this.contextManager.countMessages(this.model.messages);
+        const beforeTokens = this.contextManager.countMessages(savedMessages);
+        console.error(`[Context] Summarized conversation (${beforeTokens}→${afterTokens} tokens, ${savedMessages.length}→${this.model.messages.length} messages)`);
+
+        return true;
     }
 
     /**
@@ -86,7 +176,10 @@ class MessageHandler {
         let fullContent = '';
 
         const filterWarning = (text) => {
-            return text.replace(/The <system_reminder>.*?Ignoring it and continuing\./gs, '').trim();
+            // Only strip the system_reminder injection — do NOT .trim() here.
+            // Trimming each chunk removes leading/trailing spaces that separate
+            // words during streaming, causing "word1" + " word2" → "word1word2".
+            return text.replace(/The <system_reminder>.*?Ignoring it and continuing./gs, '');
         };
 
         try {

@@ -4,7 +4,8 @@
  * Connects to any OpenAI-compatible API endpoint (OmniRoute, OpenRouter,
  * local vLLM, Ollama, etc.) via /v1/chat/completions with SSE streaming.
  *
- * Supports: streaming, function calling (tools), usage tracking.
+ * Supports: streaming, function calling (tools), usage tracking,
+ * response-level KV caching, and API-level prompt caching markers.
  *
  * Env vars:
  *   OPENAI_API_KEY   — API key (required)
@@ -13,16 +14,49 @@
  */
 
 const fetch = require('node-fetch');
+const { KVCache } = require('../core/kv-cache');
+
+/** Transient network errors worth retrying. */
+const TRANSIENT_ERRORS = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND',
+  'socket hang up', 'aborted', 'network error', 'fetch failed',
+]);
+
+/**
+ * @param {Error} e
+ * @returns {boolean}
+ */
+function _isTransient(e) {
+  const msg = (e.message || '').toLowerCase();
+  if (TRANSIENT_ERRORS.has(e.code) || TRANSIENT_ERRORS.has(e.type)) return true;
+  for (const term of TRANSIENT_ERRORS) {
+    if (msg.includes(term.toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {import('http').IncomingMessage} res
+ * @returns {boolean} HTTP status is a transient server error
+ */
+function _isRetryableStatus(res) {
+  return res.status === 429 || res.status >= 500;
+}
 
 class OpenAIAdapter {
   /**
    * @param {Object} [opts]
-   * @param {string} [opts.apiKey]      — override OPENAI_API_KEY
-   * @param {string} [opts.baseUrl]     — override OPENAI_BASE_URL
-   * @param {string} [opts.model]       — override OPENAI_MODEL
-   * @param {number} [opts.maxTokens]   — max completion tokens (default 16384)
-   * @param {boolean} [opts.tools]      — enable function calling (default false)
-   * @param {Object[]} [opts.toolSchemas] — OpenAI tool schema array
+   * @param {string} [opts.apiKey]              — override OPENAI_API_KEY
+   * @param {string} [opts.baseUrl]             — override OPENAI_BASE_URL
+   * @param {string} [opts.model]               — override OPENAI_MODEL
+   * @param {number} [opts.maxTokens]           — max completion tokens (default 16384)
+   * @param {boolean} [opts.tools]              — enable function calling (default false)
+   * @param {Object[]} [opts.toolSchemas]       — OpenAI tool schema array
+   * @param {boolean} [opts.cacheEnabled]       — enable response-level KV cache (default true)
+   * @param {number}  [opts.cacheMaxSize]       — max cached responses (default 100)
+   * @param {number}  [opts.cacheTtlMs]         — cache TTL in ms (default 30 min)
+   * @param {boolean} [opts.promptCacheControl] — add cache_control markers for Anthropic (default false)
+   * @param {number}  [opts.maxRetries]         — max retries for transient errors (default 3)
    */
   constructor(opts = {}) {
     this.apiKey  = opts.apiKey  || process.env.OPENAI_API_KEY  || '';
@@ -47,6 +81,22 @@ class OpenAIAdapter {
     /** AbortController for cancelling in-flight streams */
     this._abortController = null;
 
+    /** Max retries for transient fetch errors */
+    this._maxRetries = opts.maxRetries ?? 3;
+
+    // ── Response-level KV cache ──
+    this._cacheEnabled = opts.cacheEnabled !== false;
+    /** @type {KVCache|null} */
+    this._cache = this._cacheEnabled
+      ? new KVCache({
+          maxSize: opts.cacheMaxSize || 100,
+          ttlMs: opts.cacheTtlMs || 30 * 60 * 1000,
+        })
+      : null;
+
+    // ── API-level prompt caching (Anthropic cache_control markers) ──
+    this._promptCacheControl = opts.promptCacheControl || false;
+
     if (!this.apiKey) {
       throw new Error('No API key. Set OPENAI_API_KEY in .env or pass apiKey option.');
     }
@@ -67,7 +117,7 @@ class OpenAIAdapter {
         if (count) {
           process.stderr.write(`  ✓ Connected to ${this.baseUrl} (${count} models)\n`);
         } else {
-          process.stderr.write(`  ✓ Connected to ${this.baseUrl}\n`);
+          process.stderr.write(`  ✓ Using ${this.baseUrl}\n`);
         }
       } else {
         process.stderr.write(`  ✓ Using ${this.baseUrl} (status ${res.status})\n`);
@@ -89,19 +139,50 @@ class OpenAIAdapter {
   }
 
   /**
+   * Build messages array for the request, optionally adding cache_control markers.
+   * @returns {Object[]} Messages with optional cache_control
+   * @private
+   */
+  _buildMessages() {
+    if (!this._promptCacheControl) return this.messages;
+
+    // Add cache_control to system message and last tool messages
+    // Anthropic: only first 4 breakpoints supported, so pick strategically
+    return this.messages.map((msg, i) => {
+      const enriched = { ...msg };
+      // Mark system prompt (first message if it's system role)
+      if (i === 0 && msg.role === 'system') {
+        enriched.cache_control = { type: 'ephemeral' };
+      }
+      // Mark the last user message to cache everything up to it
+      // (This caches system + all prior turns as a prefix)
+      return enriched;
+    });
+  }
+
+  /**
    * Build the request body for /v1/chat/completions.
    * @returns {Object}
+   * @private
    */
   _buildRequestBody() {
     const body = {
       model: this.model,
-      messages: this.messages,
+      messages: this._buildMessages(),
       max_tokens: this.maxTokens,
       stream: true,
     };
 
     if (this._toolsEnabled && this._toolSchemas?.length) {
-      body.tools = this._toolSchemas;
+      // Add cache_control to tool definitions for Anthropic
+      if (this._promptCacheControl) {
+        body.tools = this._toolSchemas.map(t => ({
+          ...t,
+          cache_control: { type: 'ephemeral' },
+        }));
+      } else {
+        body.tools = this._toolSchemas;
+      }
       body.tool_choice = 'auto';
     }
 
@@ -112,6 +193,9 @@ class OpenAIAdapter {
    * Stream the model's response for the last messages.
    * Async generator yielding text chunks.
    *
+   * On cache hit: yields cached text (no API call).
+   * On cache miss: streams from API, caches non-tool-call responses.
+   *
    * Handles:
    * - Regular text content chunks
    * - Function call chunks (collected into this.pendingToolCalls)
@@ -120,41 +204,104 @@ class OpenAIAdapter {
    * @yields {string} Response text chunks
    */
   async *streamMessage() {
+    // ── Check response cache ──
+    if (this._cache) {
+      const cached = this._cache.get(this.messages);
+      if (cached !== null) {
+        // Cache hit — yield the cached response without API call
+        this.lastUsage = { prompt_tokens: 0, completion_tokens: 0, _cacheHit: true };
+        yield cached;
+        // Append assistant message to history (same as API path)
+        this.messages.push({ role: 'assistant', content: cached });
+        return;
+      }
+    }
+
+    // ── Cache miss — stream from API (with retry) ──
     const body = this._buildRequestBody();
-    this._abortController = new AbortController();
+    let lastError;
 
-    let res;
-    try {
-      res = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: this._abortController.signal,
-      });
-    } catch (e) {
-      if (e.name === 'AbortError') return; // cancelled
-      throw new Error(`API request failed: ${e.message}`);
+    for (let attempt = 0; attempt <= this._maxRetries; attempt++) {
+      // Reuse existing controller if already aborted (user called abort() before stream)
+      if (this._abortController?.signal?.aborted) return;
+      this._abortController = new AbortController();
+
+      let res;
+      try {
+        res = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: this._abortController.signal,
+        });
+      } catch (e) {
+        if (e.name === 'AbortError') return; // cancelled
+        lastError = e;
+        if (_isTransient(e) && attempt < this._maxRetries) {
+          const delay = 1000 * Math.pow(2, attempt);
+          process.stderr.write(`  ⚠ ${e.message} — retrying in ${delay / 1000}s (${attempt + 1}/${this._maxRetries})\n`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw new Error(attempt > 0
+          ? `API request failed after ${attempt} retries: ${e.message}`
+          : `API request failed: ${e.message}`
+        );
+      }
+
+      if (_isRetryableStatus(res) && attempt < this._maxRetries) {
+        const delay = 1000 * Math.pow(2, attempt);
+        const retryAfter = res.headers?.get?.('retry-after');
+        const waitMs = retryAfter ? Math.min(parseInt(retryAfter, 10) * 1000, 30000) : delay;
+        process.stderr.write(`  ⚠ API ${res.status} — retrying in ${waitMs / 1000}s (${attempt + 1}/${this._maxRetries})\n`);
+        res.body?.resume?.(); // drain body to free socket
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => 'unknown error');
+        throw new Error(`API error ${res.status}: ${errText.slice(0, 500)}`);
+      }
+
+      // ── Stream SSE ──
+      try {
+        const result = yield* this._streamSSE(res);
+        // Success — cache and return
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        lastError = e;
+        if (_isTransient(e) && attempt < this._maxRetries) {
+          const delay = 1000 * Math.pow(2, attempt);
+          process.stderr.write(`  ⚠ Stream interrupted: ${e.message} — retrying in ${delay / 1000}s (${attempt + 1}/${this._maxRetries})\n`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
+      }
     }
+  }
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => 'unknown error');
-      throw new Error(`API error ${res.status}: ${errText.slice(0, 500)}`);
-    }
-
-    // Parse SSE stream
+  /**
+   * Parse SSE stream from a response, yield text chunks, collect tool calls.
+   * Caches pure text responses on completion.
+   * @param {import('node-fetch').Response} res
+   * @yields {string}
+   * @private
+   */
+  async *_streamSSE(res) {
     const reader = res.body;
     let buffer = '';
     let fullText = '';
-    // Accumulate tool call deltas
-    const toolCallMap = new Map(); // index -> {id, name, arguments}
+    const toolCallMap = new Map();
 
     for await (const chunk of reader) {
       buffer += chunk.toString();
 
-      // Process complete SSE lines
       while (buffer.includes('\n')) {
         const nlIdx = buffer.indexOf('\n');
         const line = buffer.slice(0, nlIdx).replace(/\r$/, '');
@@ -167,7 +314,6 @@ class OpenAIAdapter {
           let parsed;
           try { parsed = JSON.parse(data); } catch { continue; }
 
-          // Usage from final chunk
           if (parsed.usage) {
             this.lastUsage = parsed.usage;
           }
@@ -175,13 +321,11 @@ class OpenAIAdapter {
           const delta = parsed.choices?.[0]?.delta;
           if (!delta) continue;
 
-          // Text content
           if (delta.content) {
             fullText += delta.content;
             yield delta.content;
           }
 
-          // Function/tool calls (streaming deltas)
           if (delta.tool_calls && this._toolsEnabled) {
             for (const tc of delta.tool_calls) {
               const idx = tc.index ?? 0;
@@ -198,28 +342,24 @@ class OpenAIAdapter {
               if (tc.function?.arguments) existing.arguments += tc.function.arguments;
             }
           }
-
-          // Finish reason — check for tool calls
-          const finishReason = parsed.choices?.[0]?.finish_reason;
-          if (finishReason === 'tool_calls' || finishReason === 'stop') {
-            // Tool calls are finalized below after stream ends
-          }
         }
       }
+    }
+
+    // Cache pure text responses
+    if (this._cache && fullText && toolCallMap.size === 0) {
+      this._cache.set(this.messages, fullText);
     }
 
     // Append assistant response to history
     const assistantMsg = { role: 'assistant', content: fullText || null };
 
-    // If tool calls were collected, attach them
     if (toolCallMap.size > 0) {
       assistantMsg.tool_calls = Array.from(toolCallMap.values()).map(tc => ({
         id: tc.id,
         type: 'function',
         function: { name: tc.name, arguments: tc.arguments },
       }));
-
-      // Set pendingToolCalls so chat-bot.js can process them
       this.pendingToolCalls = assistantMsg.tool_calls.map(tc => ({
         id: tc.id,
         name: tc.function.name,
@@ -235,7 +375,7 @@ class OpenAIAdapter {
     this._abortController?.abort();
   }
 
-  /** Reset conversation history. */
+  /** Reset conversation history and clear cache. */
   reset() {
     this.messages = [];
     this.lastUsage = null;
@@ -246,6 +386,23 @@ class OpenAIAdapter {
   cleanup() {
     this._abortController?.abort();
     this._abortController = null;
+  }
+
+  // ── Cache API ──
+
+  /** @returns {Object|null} Cache metrics, or null if cache disabled */
+  getCacheStats() {
+    return this._cache ? this._cache.getMetrics() : null;
+  }
+
+  /** @returns {string} Human-readable cache stats */
+  getCacheStatsString() {
+    return this._cache ? this._cache.statsString() : 'KVCache: disabled';
+  }
+
+  /** Clear the response cache. */
+  clearCache() {
+    this._cache?.clear();
   }
 }
 

@@ -34,10 +34,8 @@ You are an AI agent with tool integration capabilities. Use the provided tools t
 ## Error Recovery
 When a tool returns an error: READ the error, understand what went wrong. Never repeat the same failing call more than 1 time. If stuck after 3 attempts, try a different approach.
 
-Available tools:
-${toolRegistry.getToolList()}
-
-Note: Use str_replace for modifications, write_file only for new files.`;
+Tools: ${Array.from(toolRegistry.tools.keys()).join(', ')}
+(Use function schemas for details. str_replace for modifications, write_file only for new files.)`;
     }
 }
 

@@ -77,7 +77,7 @@ class ChatBot {
             chalk.dim('  model ') + chalk.cyan(modelName) +
             chalk.dim('  mode ') + modeColor(mode) +
             chalk.dim('  ' + cwd) + '\n' +
-            chalk.dim('  exit  clear  /model <name>  [Tab]\n') +
+            chalk.dim('  exit  clear  /cache  /model <name>  [Tab]\n') +
             '\n'
         );
     }
@@ -85,15 +85,24 @@ class ChatBot {
     _printUsage() {
         const u = this.model?.lastUsage;
         if (!u) return;
-        const cached = u.prompt_tokens_details?.cached_tokens ?? u.cache_read_input_tokens ?? 0;
-        const parts = ['\u2191' + u.prompt_tokens, cached ? chalk.green('\u26a1' + cached) : null, '\u2193' + u.completion_tokens].filter(Boolean);
-        process.stdout.write(chalk.dim(`  ${parts.join(' ')}\n`));
+        // KV cache hit — skip API entirely
+        if (u._cacheHit) {
+            process.stdout.write(chalk.dim('  ') + chalk.green('\u26a1 KV cache hit') + chalk.dim(' (no API call)\n'));
+            return;
+        }
+        const apiCached = u.prompt_tokens_details?.cached_tokens ?? u.cache_read_input_tokens ?? 0;
+        const kvStats = this.model?.getCacheStatsString?.() || '';
+        const parts = ['\u2191' + u.prompt_tokens, apiCached ? chalk.green('\u26a1' + apiCached) : null, '\u2193' + u.completion_tokens].filter(Boolean);
+        process.stdout.write(chalk.dim(`  ${parts.join(' ')}`));
+        if (kvStats) process.stdout.write(chalk.dim(`  ${kvStats}`));
+        process.stdout.write('\n');
     }
 
     async clearChat() {
         this.model.reset();
         this.messageHandler.reset();
         this.session.reset();
+        this.model.clearCache?.();
         process.stdout.write('\x1b[2J\x1b[H'); // clear screen
         this._printHeader();
     }
@@ -136,6 +145,16 @@ class ChatBot {
                 } else {
                     model.showThinking = msg !== '/think off';
                     console.log(`Thinking display: ${model.showThinking ? 'ON' : 'OFF'}\n`);
+                }
+                continue;
+            }
+            if (msg === '/cache' || msg === '/cache clear') {
+                if (msg === '/cache clear') {
+                    this.model.clearCache?.();
+                    console.log('KV cache cleared\n');
+                } else {
+                    const stats = this.model?.getCacheStatsString?.();
+                    console.log(stats || 'KV cache: disabled\n');
                 }
                 continue;
             }
@@ -271,7 +290,53 @@ class ChatBot {
         return smartFeedback;
     }
 
-    async handleToolCalls(maxIterations = 20) {
+    /**
+     * Compress a tool result for storage in message history.
+     * Keeps full output for errors (model needs details to fix),
+     * compresses successful outputs to save context tokens.
+     * @param {string} tool - Tool name
+     * @param {Object} params - Tool parameters
+     * @param {string} result - Full tool result
+     * @returns {string} Compressed result for message history
+     */
+    _compressToolResult(tool, params, result) {
+        if (!result) return result;
+        // Errors: keep full — model needs details to fix
+        if (result.startsWith('Error:') || result.startsWith('[COMPILATION FAILED]') || result.startsWith('[RUNTIME ERROR]')) {
+            return result.length > 2000 ? result.substring(0, 2000) + '...(truncated error)' : result;
+        }
+        // read_file: just report what was read, not the content
+        if (tool === 'read_file') {
+            const lines = (result.match(/\n/g) || []).length + 1;
+            const preview = result.split('\n').slice(0, 3).join(' ');
+            return `[read_file: ${params.path || '?'} — ${lines} lines]\nPreview: ${preview.slice(0, 300)}\n(Use read_file offset/limit for specific sections)`;
+        }
+        // list_dir / tree: keep compact
+        if (tool === 'list_dir' || tool === 'tree') {
+            return result.length > 800 ? result.substring(0, 800) + '...' : result;
+        }
+        // write_file / str_replace: keep short diff
+        if (tool === 'write_file' || tool === 'str_replace') {
+            return result.length > 600 ? result.substring(0, 600) + '...' : result;
+        }
+        // bash/execute success: keep first lines + summary
+        if (tool === 'bash' || tool === 'execute') {
+            if (result.length > 1000) {
+                const lines = result.split('\n');
+                const head = lines.slice(0, 10).join('\n');
+                const tail = lines.slice(-3).join('\n');
+                return `${head}\n... (${lines.length - 13} lines omitted) ...\n${tail}`;
+            }
+            return result;
+        }
+        // Default: truncate long results
+        if (result.length > 1500) {
+            return result.substring(0, 1500) + '...(truncated)';
+        }
+        return result;
+    }
+
+    async handleToolCalls(maxIterations = 50) {
         let iteration = 0;
         /** Track repeated tool+params to detect loops */
         const failureCache = new Map();
@@ -281,8 +346,23 @@ class ChatBot {
         this._failedCompiles = this._failedCompiles || new Map();
         /** Track whether any tool calls were processed (to prevent duplicate handleCommands) */
         this._handledToolCalls = false;
+        /** Rate limit cooldown: increases on429, resets on success (ms) */
+        let rateLimitCooldown = 0;
+        /** Overall timeout: prevent infinite loops (10 minutes) */
+        const overallDeadline = Date.now() + 600_000;
 
         while (iteration < maxIterations) {
+            // Check overall timeout
+            if (Date.now() > overallDeadline) {
+                console.log(chalk.yellow('\n⚠️  Overall timeout reached (10 min) — stopping agent loop\n'));
+                break;
+            }
+            // Rate limit cooldown between iterations
+            if (rateLimitCooldown > 0) {
+                process.stderr.write(`  ⏳ Rate limit cooldown: ${rateLimitCooldown / 1000}s\n`);
+                await new Promise(r => setTimeout(r, rateLimitCooldown));
+                rateLimitCooldown = 0; // reset, will re-increase if next call also429s
+            }
             // Prefer native function calling (OpenRouter), fallback to XML parsing
             let toolCalls;
             if (this.model.pendingToolCalls?.length) {
@@ -415,24 +495,25 @@ class ChatBot {
                         if (prev >= 2) {
                             // Same tool+params failed twice — force model to read+analyze instead of retrying
                             const augmentedResult = `[LOOP DETECTED] This is attempt #${prev + 1} with the same params. STOP retrying. Read the file around the error line, analyze the root cause, fix with str_replace, then re-run.\nError: ${result}`;
-                            results.push({ tool, id, result: augmentedResult });
+                            results.push({ tool, id, result: augmentedResult, compressed: augmentedResult });
                             continue;
                         }
                     }
 
                     const truncated = result.length > 3000 ? result.substring(0, 3000) + '...(truncated)' : result;
-                    results.push({ tool, params, id, result: truncated });
+                    const compressed = this._compressToolResult(tool, params, truncated);
+                    results.push({ tool, params, id, result: truncated, compressed });
                 } catch (e) {
                     stopSpinner(spin);
                     process.stdout.write(`\r\x1b[K  ${chalk.red('\u2717')} ${chalk.bold(tool)}${label ? chalk.dim(' ' + label) : ''}: ${e.message}\n`);
-                    results.push({ tool, params, id, result: `Error: ${e.message}` });
+                    results.push({ tool, params, id, result: `Error: ${e.message}`, compressed: `Error: ${e.message}` });
                 }
             }
 
             // For function calling: push tool role messages; for XML: send as user message
             if (results[0]?.id) {
-                for (const { tool, id, result } of results) {
-                    this.model.messages.push({ role: 'tool', tool_call_id: id, name: tool, content: result });
+                for (const { tool, id, compressed } of results) {
+                    this.model.messages.push({ role: 'tool', tool_call_id: id, name: tool, content: compressed || '' });
                 }
                 await this.messageHandler.send(null, false); // trigger stream without adding user msg
             } else {
@@ -471,7 +552,7 @@ class ChatBot {
                 const feedbackHint = this.autoExecute
                     ? 'If the user\'s original request needs more steps, continue. Otherwise respond briefly to confirm.'
                     : 'Respond briefly to confirm what was done. Do NOT auto-run additional commands.';
-                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.result}`).join('\n')}${origHint}${smartAnalysis}\n\n${feedbackHint}`;
+                const feedback = `[Tool Results]\n${results.map(r => `[${r.tool}] ${r.compressed || r.result}`).join('\n')}${origHint}${smartAnalysis}\n\n${feedbackHint}`;
                 await this.messageHandler.send(feedback, false);
             }
             
@@ -490,6 +571,12 @@ class ChatBot {
                 clearTimeout(streamTimeout);
                 stopSpinner(streamInterval);
                 cleanupSigint();
+            }
+            // Detect rate limit from error output (messageHandler.stream catches internally)
+            if (full && (full.includes('429') || full.toLowerCase().includes('rate limit'))) {
+                rateLimitCooldown = Math.min(rateLimitCooldown + 5000, 60_000); // +5s, max60s
+            } else {
+                rateLimitCooldown = 0;
             }
 
             // Display conversational text — show text before tool calls (same as chat())
@@ -540,7 +627,7 @@ class ChatBot {
             this._handledToolCalls = false;
             return;
         }
-        const maxIterations = 20;
+        const maxIterations = 50;
         let iteration = 0;
 
         while (iteration < maxIterations) {
