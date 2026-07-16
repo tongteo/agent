@@ -22,6 +22,7 @@ const { registerFileOps } = require('./file-ops');
 const { registerLSPTools } = require('./lsp-tools');
 const { registerMiscTools } = require('./misc-tools');
 const { registerSubagentTools } = require('./subagent-tools');
+const { registerCGCTools, getCGC } = require('./cgc-tools');
 const { ToolParser } = require('../agent');
 
 class ToolRegistry {
@@ -183,6 +184,9 @@ class ToolRegistry {
             await client.stop();
         }
         this.lspClients.clear();
+        // Shut down CGC MCP client if running
+        const cgc = getCGC();
+        if (cgc) cgc.destroy();
     }
 
     /**
@@ -193,6 +197,7 @@ class ToolRegistry {
         registerLSPTools(this);
         registerMiscTools(this);
         registerSubagentTools(this);
+        registerCGCTools(this);
         // Sync tool names to ToolParser for JSON-format detection
         ToolParser.syncToolNames(this);
     }
