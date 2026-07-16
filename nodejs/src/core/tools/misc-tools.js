@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, execFileSync } = require('child_process');
-const { IS_WINDOWS, commandExists, resolvePython, buildCmd, checkCommandSafety } = require('./utils');
+const { IS_WINDOWS, commandExists, resolvePython, buildCmd, quoteArg, checkCommandSafety } = require('./utils');
 
 /**
  * Strip value of quotes and inline comments.
@@ -502,6 +502,198 @@ function registerMiscTools(registry) {
                 max_length: { type: 'number', description: 'Max characters to return. Default: 3000' }
             },
             required: ['url']
+        }
+    );
+
+    // --- Ripgrep search ---
+    registry.register('ripgrep',
+        async ({ pattern, path: dirPath = '.', glob, ignore_case = false, max_results = 50, context = 0 }) => {
+            try {
+                if (!commandExists('rg')) {
+                    return 'Error: ripgrep (rg) not found. Install with: apt install ripgrep or brew install ripgrep';
+                }
+                const args = [pattern];
+                if (glob) {
+                    args.push('--glob', glob);
+                }
+                if (ignore_case) {
+                    args.push('-i');
+                }
+                if (context > 0) {
+                    args.push('-C', String(context));
+                }
+                args.push('--max-count', String(max_results));
+                args.push('--color', 'never');
+                args.push('--no-heading');
+                args.push(dirPath);
+
+                const result = execFileSync('rg', args, {
+                    encoding: 'utf-8',
+                    maxBuffer: 5 * 1024 * 1024,
+                    timeout: 30000,
+                    cwd: registry.session?.workingDir || process.cwd()
+                });
+                if (!result.trim()) return `No matches found for: ${pattern}`;
+
+                const lines = result.trim().split('\n');
+                const truncated = lines.length > max_results
+                    ? lines.slice(0, max_results).join('\n') + `\n... (truncated, showing ${max_results} of ${lines.length} matches)`
+                    : result;
+                return truncated;
+            } catch (e) {
+                if (e.status === 1 && !e.stdout) return `No matches found for: ${pattern}`;
+                return `ripgrep error: ${e.message}\n${e.stderr || ''}`;
+            }
+        },
+        'Fast code search using ripgrep. Params: {"pattern": "function foo", "path": "./src", "glob": "*.js", "ignore_case": true, "max_results": 50, "context": 2}',
+        'search',
+        {
+            description: 'Fast code search using ripgrep (rg). Searches file contents with regex patterns. Supports file glob filtering, case-insensitive mode, and context lines.',
+            properties: {
+                pattern: { type: 'string', description: 'Regex pattern to search for' },
+                path: { type: 'string', description: 'Directory path to search in. Default: current dir' },
+                glob: { type: 'string', description: 'File glob filter (e.g. "*.js", "*.py", "*.rs"). Default: all files' },
+                ignore_case: { type: 'boolean', description: 'Case-insensitive search. Default: false' },
+                max_results: { type: 'number', description: 'Max matches to return. Default: 50' },
+                context: { type: 'number', description: 'Lines of context before/after each match. Default: 0' }
+            },
+            required: ['pattern']
+        }
+    );
+
+    // --- Awk text processor ---
+    registry.register('awk',
+        async ({ script, file, input, field_separator = ' ' }) => {
+            try {
+                if (!commandExists('awk')) {
+                    return 'Error: awk not found. Install with: apt install awk or brew install awk';
+                }
+                const fullScript = script
+                    ? script
+                    : '{ print }';
+
+                let cmd;
+                if (file) {
+                    cmd = `awk -F '${field_separator.replace(/'/g, "'\\''")}' '${fullScript.replace(/'/g, "'\\''")}' ${quoteArg(file)}`;
+                } else if (input != null) {
+                    cmd = `echo ${quoteArg(String(input))} | awk -F '${field_separator.replace(/'/g, "'\\''")}' '${fullScript.replace(/'/g, "'\\''")}'`;
+                } else {
+                    return 'Error: either "file" or "input" must be provided';
+                }
+
+                const result = execSync(cmd, {
+                    encoding: 'utf-8',
+                    maxBuffer: 5 * 1024 * 1024,
+                    timeout: 30000,
+                    shell: '/bin/sh',
+                    cwd: registry.session?.workingDir || process.cwd()
+                });
+                return result.trim() || '(empty)';
+            } catch (e) {
+                return `awk error: ${e.message}\n${e.stderr || ''}`;
+            }
+        },
+        'Process text with awk. Params: {"script": "{print $1}", "file": "data.txt", "input": "hello world", "field_separator": ","}',
+        'text',
+        {
+            description: 'Process text or files using awk. Supports custom field separators, inline scripts, and file or stdin input.',
+            properties: {
+                script: { type: 'string', description: 'Awk script/program. E.g. "{print $1, $3}" or "/pattern/{count++} END {print count}"' },
+                file: { type: 'string', description: 'Input file path (mutually exclusive with "input")' },
+                input: { type: 'string', description: 'Inline input string (mutually exclusive with "file")' },
+                field_separator: { type: 'string', description: 'Field separator (FS). Default: " " (space)' }
+            },
+            required: ['script']
+        }
+    );
+
+    // --- Calculator with Wolfram Alpha ---
+    registry.register('calculator',
+        async ({ expression, use_wolfram = false, wolfram_app_id }) => {
+            try {
+                // 1. Try local safe evaluation first
+                const sanitized = expression
+                    .replace(/[^0-9+\-*/.%()^√πe\s]/g, '')
+                    .trim();
+                if (!sanitized) return 'Error: invalid expression';
+
+                // Convert ^ to **, √ to Math.sqrt, π to Math.PI, e to Math.E
+                const jsExpr = sanitized
+                    .replace(/\^/g, '**')
+                    .replace(/√(\d*\.?\d+|[a-z]+)/g, 'Math.sqrt($1)')
+                    .replace(/π/g, 'Math.PI')
+                    .replace(/(?<!\w)e(?!\w)/g, 'Math.E');
+
+                let localResult;
+                try {
+                    // Use Function constructor for safe math evaluation
+                    localResult = new Function(`"use strict"; return (${jsExpr})`)();
+                } catch {
+                    localResult = undefined;
+                }
+
+                // If wolfram requested or local fails, try Wolfram Alpha
+                const appId = wolfram_app_id || process.env.WOLFRAM_APP_ID;
+                if ((use_wolfram || localResult === undefined) && appId) {
+                    try {
+                        const fetch = await getFetch();
+                        const encodedQuery = encodeURIComponent(expression);
+                        const url = `https://api.wolframalpha.com/v2/query?appid=${appId}&input=${encodedQuery}&output=JSON&format=plaintext`;
+
+                        const res = await fetch(url, {
+                            signal: AbortSignal.timeout(15000),
+                        });
+                        if (!res.ok) {
+                            return localResult !== undefined
+                                ? `Local: ${localResult}\nWolfram Alpha: API error (HTTP ${res.status})`
+                                : `Wolfram Alpha API error (HTTP ${res.status})`;
+                        }
+                        const data = await res.json();
+                        const pods = data?.queryresult?.pods || [];
+
+                        // Extract key pods: Result, DecimalApproximation, ExactResult, etc.
+                        const relevant = ['Result', 'DecimalApproximation', 'ExactResult', 'Value', 'Solution'];
+                        const lines = [];
+                        for (const pod of pods) {
+                            if (relevant.includes(pod.title) || !pod.title) {
+                                const texts = (pod.subpods || [])
+                                    .map(sp => sp.plaintext)
+                                    .filter(Boolean);
+                                lines.push(...texts);
+                            }
+                        }
+                        const wolframText = lines.join('\n') || JSON.stringify(data?.queryresult, null, 2).slice(0, 2000);
+
+                        if (localResult !== undefined) {
+                            return `Local: ${localResult}\nWolfram Alpha:\n${wolframText}`;
+                        }
+                        return `Wolfram Alpha:\n${wolframText}`;
+                    } catch (e) {
+                        if (localResult !== undefined) {
+                            return `Local: ${localResult}\nWolfram Alpha API error: ${e.message}`;
+                        }
+                        return `Wolfram Alpha API error: ${e.message}`;
+                    }
+                }
+
+                if (localResult !== undefined) {
+                    return `Result: ${localResult}`;
+                }
+                return 'Error: could not evaluate expression. Try setting WOLFRAM_APP_ID for advanced computation.';
+            } catch (e) {
+                return `Calculator error: ${e.message}`;
+            }
+        },
+        'Evaluate math expressions, optionally using Wolfram Alpha. Params: {"expression": "2 + 2 * (3^4)", "use_wolfram": false, "wolfram_app_id": "xxxxx"}',
+        'math',
+        {
+            description: 'Evaluate mathematical expressions locally or via Wolfram Alpha API. Supports +, -, *, /, ^ (power), √ (sqrt), π (pi). Set use_wolfram=true or WOLFRAM_APP_ID env var for advanced queries.',
+            properties: {
+                expression: { type: 'string', description: 'Math expression to evaluate. E.g. "2 + 2", "sqrt(144) * π", "integrate x^2 dx"' },
+                use_wolfram: { type: 'boolean', description: 'Force Wolfram Alpha query. Default: false (local eval first, falls back to Wolfram)' },
+                wolfram_app_id: { type: 'string', description: 'Wolfram Alpha App ID (overrides WOLFRAM_APP_ID env var)' }
+            },
+            required: ['expression']
         }
     );
 }

@@ -10,6 +10,8 @@
     "start": "node bin/openrouter",
     "test": "node --experimental-vm-modules tests/run.js",
     "test:watch": "node --experimental-vm-modules tests/run.js --watch",
+    "test:jest": "jest",
+    "test:jest:watch": "jest --watch",
     "lint": "node -e \"const fs=require('fs'),path=require('path');function walk(d){fs.readdirSync(d).forEach(f=>{const p=path.join(d,f);if(fs.statSync(p).isDirectory())walk(p);else if(p.endsWith('.js'))try{require('./'+p)}catch(e){console.log(p+':'+e.message)}})};walk('src');console.log('Lint OK')\"",
     "doctor": "node -e \"const deps=['puppeteer-core','chalk','cli-highlight','node-fetch','vscode-jsonrpc','vscode-languageserver-protocol','highlight.js'];deps.forEach(d=>{try{require(d);console.log('✓ '+d)}catch{console.log('✗ '+d+' (missing)')}});console.log('Node:',process.version)\""
   },
@@ -37,5 +39,8 @@
     "lsp",
     "playwright"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^30.4.2"
+  }
 }
