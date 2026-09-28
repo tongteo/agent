@@ -612,7 +612,7 @@ class ChatBot {
 
             // Display conversational text — show text before tool calls (same as chat())
             // so the user always sees the model's commentary between tool executions
-            const hasToolCallFlag = hasToolCall(full, ToolParser.TOOL_NAMES);
+            const hasToolCallFlag = Boolean(this.model.pendingToolCalls?.length) || ToolParser.parse(full).length > 0;
             if (full.trim() && full.trim() !== '(no response)') {
                 let displayText = full.trim();
                 if (hasToolCallFlag) {
