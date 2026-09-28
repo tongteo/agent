@@ -4,6 +4,7 @@
  */
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -104,22 +105,54 @@ const LANG_MAP = {
  * @returns {{ ok: boolean, resolved: string, error?: string }}
  */
 function sandboxPath(filePath, allowedRoot) {
-    const root = allowedRoot || process.cwd();
-    // Expand ~ to home directory
-    const homedir = os.homedir();
-    const expanded = filePath.startsWith('~/') ? path.join(homedir, filePath.slice(2)) : filePath;
-    const resolved = path.resolve(root, expanded);
+    if (typeof filePath !== 'string' || filePath.includes('\0')) {
+        return { ok: false, resolved: '', error: 'Path must be a valid string without null bytes' };
+    }
 
-    // Check containment (resolved must be under root, or under home for ~/ paths)
-    const underRoot = resolved.startsWith(root + path.sep) || resolved === root;
-    const underHome = resolved.startsWith(homedir + path.sep) || resolved === homedir;
-    if (!underRoot && !underHome) {
+    const root = path.resolve(allowedRoot || process.cwd());
+    const homedir = path.resolve(os.homedir());
+    const expanded = filePath === '~' ? homedir
+        : filePath.startsWith('~/') ? path.join(homedir, filePath.slice(2))
+            : filePath;
+    const resolved = path.resolve(root, expanded);
+    const isWithin = (parent, candidate) => {
+        const relative = path.relative(parent, candidate);
+        return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    };
+    const allowedRoots = [root, homedir];
+    if (!allowedRoots.some(allowed => isWithin(allowed, resolved))) {
         return { ok: false, resolved, error: `Path escapes sandbox: ${filePath} resolves outside allowed directory` };
     }
 
-    // Reject null bytes (can bypass string checks)
-    if (resolved.includes('\0') || filePath.includes('\0')) {
-        return { ok: false, resolved, error: 'Path contains null bytes' };
+    // Resolve the deepest existing ancestor to catch symlinks, including dangling links.
+    let existingAncestor = resolved;
+    while (true) {
+        try {
+            fs.lstatSync(existingAncestor);
+            break;
+        } catch (e) {
+            if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') {
+                return { ok: false, resolved, error: `Cannot validate path: ${e.message}` };
+            }
+            const parent = path.dirname(existingAncestor);
+            if (parent === existingAncestor) {
+                return { ok: false, resolved, error: 'Cannot validate path ancestry' };
+            }
+            existingAncestor = parent;
+        }
+    }
+
+    let realAncestor;
+    try {
+        realAncestor = fs.realpathSync(existingAncestor);
+    } catch (e) {
+        return { ok: false, resolved, error: `Cannot resolve path safely: ${e.message}` };
+    }
+    const realRoots = allowedRoots.map(allowed => {
+        try { return fs.realpathSync(allowed); } catch { return allowed; }
+    });
+    if (!realRoots.some(allowed => isWithin(allowed, realAncestor))) {
+        return { ok: false, resolved, error: `Path escapes sandbox through a symlink: ${filePath}` };
     }
 
     return { ok: true, resolved };

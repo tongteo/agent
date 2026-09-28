@@ -233,11 +233,9 @@ describe('ToolParser false positive detection', () => {
     it('should not parse code examples as tool calls', () => {
         const text = 'Here is an example of using the tool:\nwrite_file\n{"path":"example.txt","content":"hello"}\n\nBut this is just documentation, not an actual call.';
         const calls = ToolParser.parse(text);
-        // This might parse as a tool call — that's a potential issue
-        // If it does, hasToolCallFlag would be true and text would be stripped
-        if (calls.length > 0) {
-            console.log('  ⚠ ToolParser parsed documentation as tool call — potential false positive');
-        }
+        assert.strictEqual(calls.length, 0, 'Documentation must not be executed as a tool call');
+        assert.strictEqual(hasToolCall(text, toolNames), false, 'Documentation must not be hidden as a tool call');
+        assert.strictEqual(stripToolCalls(text, toolNames), text, 'Documentation should remain visible');
     });
 
     it('should parse actual XML tool calls correctly', () => {

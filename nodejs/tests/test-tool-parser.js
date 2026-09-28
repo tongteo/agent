@@ -113,6 +113,24 @@ describe('ToolParser', () => {
     assert.strictEqual(0, calls.length);
   });
 
+  it('does not parse documentation examples followed by explanatory prose', () => {
+    const input = 'Example:\nwrite_file\n{"path":"example.txt","content":"hello"}\nThis is documentation, not an instruction.';
+    assert.strictEqual(ToolParser.parse(input).length, 0);
+  });
+
+  it('does not parse JSON examples inside fenced code blocks', () => {
+    const input = 'Example:\n```json\nwrite_file\n{"path":"example.txt","content":"hello"}\n```';
+    assert.strictEqual(ToolParser.parse(input).length, 0);
+  });
+
+  it('extracts JSON objects when braces occur inside string content', () => {
+    const content = '<script>const closing = "}";</script>';
+    const input = 'write_file\n' + JSON.stringify({ path: 'page.html', content });
+    const calls = ToolParser.parse(input);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].params.content, content);
+  });
+
   it('parses write_file JSON with multiline escaped content', () => {
     const input = 'write_file\n{"path":"multi.c","content":"line1\\nline2\\nline3\\n"}';
     const calls = ToolParser.parse(input);

@@ -13,7 +13,7 @@ const { ToolRegistry } = require('./core/tools');
 const { AgentPrompt, ToolParser } = require('./core/agent');
 const { SubagentManager } = require('./core/subagent');
 const { autoFixCFile } = require('./core/auto-fix');
-const { startSpinner, stopSpinner, withSigint, createStreamTimeout, hasToolCall, stripToolCalls } = require('./core/stream-utils');
+const { startSpinner, stopSpinner, withSigint, createStreamTimeout, stripToolCalls } = require('./core/stream-utils');
 
 class ChatBot {
     constructor(apiKey, model = '', agentMode = false, enableSubagents = true, autoExecute = true, confirmBeforeTool = true) {
@@ -37,16 +37,16 @@ class ChatBot {
     async init() {
         this.session.load();
 
-        const openaiKey = process.env.OPENAI_API_KEY;
+        const openaiKey = this.apiKey || process.env.OPENAI_API_KEY;
         if (openaiKey) {
             const { OpenAIAdapter } = require('./models/openai-adapter');
-            this.model = new OpenAIAdapter();
+            this.model = new OpenAIAdapter({ apiKey: this.apiKey, model: this.modelName });
             // Enable tools for agent mode
             if (this.agentMode && this.tools) {
                 this.model.enableTools(this.tools.getToolSchemas());
             }
         } else {
-            throw new Error('No provider configured. Set OPENAI_API_KEY in .env');
+            throw new Error('No provider configured. Set OPENAI_API_KEY in .env to the key shown in the 9Router dashboard.');
         }
         await this.model.init();
 
@@ -203,7 +203,7 @@ class ChatBot {
                 }
 
                 // Detect JSON-format tool calls (write_file\n{...}, bash\n{...})
-                const hasToolCallFlag = hasToolCall(full, ToolParser.TOOL_NAMES, this.model.pendingToolCalls);
+                const hasToolCallFlag = Boolean(this.model.pendingToolCalls?.length) || ToolParser.parse(full).length > 0;
                 if (full.trim()) {
                     // Show conversational text even when tool call XML/JSON is present
                     let displayText = full.trim();
@@ -404,8 +404,9 @@ class ChatBot {
 
             // Confirmation step: ask user before executing write/bash/execute tools
             if (this.confirmBeforeTool) {
-                const confirmTools = toolCalls.filter(tc => 
-                    ['write_file', 'str_replace', 'bash', 'execute'].includes(tc.tool)
+                const confirmTools = toolCalls.filter(tc =>
+                    ['write_file', 'str_replace', 'append', 'insert_at_line', 'bash', 'execute',
+                        'package_install', 'rename_symbol', 'cgc_delete', 'cgc_add_package'].includes(tc.tool)
                 );
                 if (confirmTools.length > 0) {
                     const summary = confirmTools.map(tc => {
@@ -755,7 +756,9 @@ class ChatBot {
         }
         console.log(`Switching model to: ${newModel}...`);
         try {
-            this.model.setModel?.(newModel);
+            this.model.setModel(newModel);
+            this.modelName = newModel;
+            if (this.subagentManager) this.subagentManager.model = newModel;
             this.messageHandler.reset();
             console.log(`Model changed to ${newModel}\n`);
         } catch (e) {

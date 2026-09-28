@@ -24,8 +24,13 @@ describe('stream-utils', () => {
       assert.ok(hasToolCall('text TOOL_CALL: ls -la', SAMPLE_TOOLS));
     });
 
-    it('detects JSON format (toolName\\n{)', () => {
+    it('detects a complete JSON tool call at the end of the response', () => {
       assert.ok(hasToolCall('write_file\n{"path":"test.txt"}', SAMPLE_TOOLS));
+    });
+
+    it('does not detect a JSON example followed by explanatory prose', () => {
+      const text = 'Example:\nwrite_file\n{"path":"test.txt"}\nThis is documentation.';
+      assert.strictEqual(hasToolCall(text, SAMPLE_TOOLS), false);
     });
 
     it('detects JSON format via pendingToolCalls', () => {
@@ -71,17 +76,17 @@ describe('stream-utils', () => {
   });
 
   describe('buildToolCallRegex', () => {
-    it('matches tool name followed by newline and brace', () => {
+    it('matches a complete JSON object after a tool name', () => {
       const re = buildToolCallRegex(SAMPLE_TOOLS);
-      assert.ok(re.test('write_file\n{'));
-      assert.ok(re.test('bash\n{'));
-      assert.ok(!re.test('unknown_tool\n{'));
+      assert.ok(re.test('write_file\n{"path":"x"}'));
+      assert.ok(re.test('bash\n{"command":"ls"}'));
+      assert.ok(!re.test('unknown_tool\n{"x":1}'));
     });
 
     it('escapes special regex chars in tool names', () => {
       const re = buildToolCallRegex(['my-tool', 'tool.v2']);
-      assert.ok(re.test('my-tool\n{'));
-      assert.ok(re.test('tool.v2\n{'));
+      assert.ok(re.test('my-tool\n{"x":1}'));
+      assert.ok(re.test('tool.v2\n{"x":1}'));
     });
   });
 });

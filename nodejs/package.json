@@ -1,7 +1,7 @@
 {
   "name": "openrouter-agent-cli",
   "version": "1.1.0",
-  "description": "AI Agent CLI — terminal-based agent with tool integration, LSP support, and Playwright-based web providers (Gemini/Claude)",
+  "description": "9Router-powered AI agent CLI with streaming, filesystem tools, MCP integration, and optional LSP support",
   "main": "bin/openrouter",
   "bin": {
     "openrouter-cli": "./bin/openrouter"
@@ -12,25 +12,20 @@
     "test:watch": "node --experimental-vm-modules tests/run.js --watch",
     "test:jest": "jest",
     "test:jest:watch": "jest --watch",
-    "lint": "node -e \"const fs=require('fs'),path=require('path');function walk(d){fs.readdirSync(d).forEach(f=>{const p=path.join(d,f);if(fs.statSync(p).isDirectory())walk(p);else if(p.endsWith('.js'))try{require('./'+p)}catch(e){console.log(p+':'+e.message)}})};walk('src');console.log('Lint OK')\"",
-    "doctor": "node -e \"const deps=['puppeteer-core','chalk','cli-highlight','node-fetch','vscode-jsonrpc','vscode-languageserver-protocol','highlight.js'];deps.forEach(d=>{try{require(d);console.log('✓ '+d)}catch{console.log('✗ '+d+' (missing)')}});console.log('Node:',process.version)\""
+    "lint": "node -e \"const fs=require('fs'),path=require('path'),cp=require('child_process');function walk(d){for(const f of fs.readdirSync(d)){const p=path.join(d,f);if(fs.statSync(p).isDirectory())walk(p);else if(p.endsWith('.js'))cp.execFileSync(process.execPath,['--check',p],{stdio:'inherit'});}}walk('src');walk('bin');console.log('JavaScript syntax check passed')\"",
+    "doctor": "node -e \"const deps=['chalk','cli-highlight','dotenv','highlight.js','node-fetch','node-pty','vscode-jsonrpc'];let failed=false;deps.forEach(d=>{try{require.resolve(d);console.log('✓ '+d)}catch{failed=true;console.error('✗ '+d+' (missing)')}});console.log('Node:',process.version);if(failed)process.exitCode=1\""
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "axios": "^1.6.0",
     "chalk": "^4.1.2",
-    "claude-code-termux": "^1.0.119",
     "cli-highlight": "^2.1.11",
     "dotenv": "^17.3.1",
     "highlight.js": "^11.9.0",
     "node-fetch": "^2.7.0",
     "node-pty": "^1.0.0",
-    "puppeteer-core": "^24.0.0",
-    "vscode-jsonrpc": "^8.2.0",
-    "vscode-languageserver-protocol": "^3.17.5"
+    "vscode-jsonrpc": "^8.2.0"
   },
   "keywords": [
     "ai",

@@ -12,9 +12,9 @@ async function main() {
     const modelArg = args.find(a => a.startsWith('--model='));
     const baseUrlArg = args.find(a => a.startsWith('--base-url='));
     const apiKeyArg = args.find(a => a.startsWith('--api-key='));
-    if (modelArg)     process.env.OPENAI_MODEL     = modelArg.split('=')[1];
-    if (baseUrlArg)   process.env.OPENAI_BASE_URL  = baseUrlArg.split('=')[1];
-    if (apiKeyArg)    process.env.OPENAI_API_KEY    = apiKeyArg.split('=')[1];
+    if (modelArg)     process.env.OPENAI_MODEL     = modelArg.slice('--model='.length);
+    if (baseUrlArg)   process.env.OPENAI_BASE_URL  = baseUrlArg.slice('--base-url='.length);
+    if (apiKeyArg)    process.env.OPENAI_API_KEY    = apiKeyArg.slice('--api-key='.length);
 
     const bot = new ChatBot('', '', agentMode, true, autoExecute, confirmBeforeTool);
     await bot.init();

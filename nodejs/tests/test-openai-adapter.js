@@ -155,4 +155,79 @@ describe('OpenAIAdapter SSE parsing', () => {
     assert.strictEqual(chunks.join(''), 'Hello world');
   });
 
+  it('defaults to the local 9Router endpoint and supports switching models', () => {
+    const oldUrl = process.env.OPENAI_BASE_URL;
+    const oldModel = process.env.OPENAI_MODEL;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_MODEL;
+    try {
+      const adapter = new (AdapterClass())({ apiKey: 'sk-test' });
+      assert.strictEqual(adapter.baseUrl, 'http://127.0.0.1:20128/v1');
+      assert.strictEqual(adapter.model, 'kr/claude-sonnet-4.5');
+      adapter._cache.set(adapter.messages, 'cached response');
+      assert.strictEqual(adapter.setModel('custom/model'), 'custom/model');
+      assert.strictEqual(adapter.model, 'custom/model');
+      assert.strictEqual(adapter._cache.size, 0);
+      adapter._cache.set(adapter.messages, 'stale conversation');
+      adapter.reset();
+      assert.strictEqual(adapter._cache.size, 0);
+      assert.throws(() => adapter.setModel(''), 'Model name cannot be empty');
+      adapter.cleanup();
+    } finally {
+      if (oldUrl === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = oldUrl;
+      if (oldModel === undefined) delete process.env.OPENAI_MODEL;
+      else process.env.OPENAI_MODEL = oldModel;
+    }
+  });
+
+  it('surfaces pretty-printed JSON errors returned with HTTP 200', async () => {
+    const body = JSON.stringify({ error: { message: 'router authentication failed' } }, null, 2);
+    const adapter = new (AdapterClass())({
+      apiKey: 'sk-test', cacheEnabled: false, maxRetries: 0,
+      fetch: () => Promise.resolve(mockResponse(body, 200)),
+    });
+    adapter.messages.push({ role: 'user', content: 'hello' });
+    let error;
+    try { for await (const _ of adapter.streamMessage()) {} } catch (e) { error = e; }
+    assert.ok(error, 'Expected an API error');
+    assert.match(error.message, /router authentication failed/);
+  });
+
+  it('preserves UTF-8 characters split across chunks and accepts a final line without newline', async () => {
+    const text = 'Tiếng Việt 🇻🇳';
+    const bytes = Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\ndata: [DONE]`);
+    const emojiOffset = bytes.indexOf(Buffer.from('🇻🇳'));
+    const stream = Readable.from([bytes.subarray(0, emojiOffset + 1), bytes.subarray(emojiOffset + 1)]);
+    const adapter = new (AdapterClass())({
+      apiKey: 'sk-test', cacheEnabled: false, maxRetries: 0,
+      fetch: () => Promise.resolve({ ok: true, status: 200, body: stream, headers: { get: () => null } }),
+    });
+    adapter.messages.push({ role: 'user', content: 'hello' });
+    const chunks = [];
+    for await (const chunk of adapter.streamMessage()) chunks.push(chunk);
+    assert.strictEqual(chunks.join(''), text);
+  });
+
+  it('does not retry a stream after visible partial output', async () => {
+    let fetchCalls = 0;
+    const stream = Readable.from((async function* () {
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n`);
+      const error = new Error('socket hang up');
+      error.code = 'ECONNRESET';
+      throw error;
+    })());
+    const adapter = new (AdapterClass())({
+      apiKey: 'sk-test', cacheEnabled: false, maxRetries: 2,
+      fetch: () => { fetchCalls++; return Promise.resolve({ ok: true, status: 200, body: stream, headers: { get: () => null } }); },
+    });
+    adapter.messages.push({ role: 'user', content: 'hello' });
+    const chunks = [];
+    let error;
+    try { for await (const chunk of adapter.streamMessage()) chunks.push(chunk); } catch (e) { error = e; }
+    assert.strictEqual(chunks.join(''), 'partial');
+    assert.strictEqual(fetchCalls, 1);
+    assert.match(error.message, /skipped to avoid duplicate text/);
+  });
+
 });

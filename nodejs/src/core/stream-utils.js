@@ -70,7 +70,7 @@ function createStreamTimeout(ms, abortFn, label = 'Stream') {
  */
 function buildToolCallRegex(toolNames) {
     const escaped = toolNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    return new RegExp('^(?:' + escaped + ')\\s*\n\{', 'm');
+    return new RegExp('(?:^|\\n)(?:' + escaped + ')[ \\t]*\\r?\\n[ \\t]*\\{[\\s\\S]*\\}[ \\t\\r\\n]*$');
 }
 
 /**
@@ -82,9 +82,11 @@ function buildToolCallRegex(toolNames) {
 function stripToolCalls(text, toolNames) {
     let cleaned = text.replace(/<tool>[\s\S]*$/i, '').trim();
     const escaped = toolNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    // Match toolName then whitespace+{ and everything after (multiline safe)
-    const jsonRe = new RegExp('(?:' + escaped + ')\\s*\\{[\\s\\S]*$', 'm');
-    cleaned = cleaned.replace(jsonRe, '').trim();
+    // Strip only a complete terminal JSON call, never an example followed by prose.
+    if (buildToolCallRegex(toolNames).test(cleaned)) {
+        const jsonRe = new RegExp('(?:' + escaped + ')[ \\t]*(?:\\r?\\n[ \\t]*|[ \\t]+)\\{[\\s\\S]*\\}[ \\t\\r\\n]*$');
+        cleaned = cleaned.replace(jsonRe, '').trim();
+    }
     return cleaned;
 }
 

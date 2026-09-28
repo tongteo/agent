@@ -7,8 +7,6 @@
 
 const { spawn } = require('child_process');
 
-/** @typedef {import('@modelcontextprotocol/sdk/dist/cjs/client').Client} MCPClient */
-
 class CGCClient {
     /**
      * @param {{ cgcCommand?: string, cgcArgs?: string[], connectTimeout?: number }} [opts]
@@ -23,7 +21,6 @@ class CGCClient {
 
         /** @type {import('child_process').ChildProcess|null} */
         this._process = null;
-        /** @type {MCPClient|null} */
         this._client = null;
         /** @type {boolean} */
         this._connected = false;

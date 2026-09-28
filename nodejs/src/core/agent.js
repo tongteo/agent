@@ -75,7 +75,6 @@ class ToolParser {
 
         // Unescape HTML entities, strip fences
         text = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-        text = text.replace(/```(?:xml|json)?\n([\s\S]*?)```/g, '$1');
 
         // XML <tool>/<params> format
         const toolRegex = /<tool>(.*?)<\/tool>\s*<params>(.*?)<\/params>/gs;
@@ -95,6 +94,8 @@ class ToolParser {
 
     static _parseJsonFormat(text) {
         const calls = [];
+        let lastJsonEnd = null;
+        let invalidSequence = false;
         const toolPattern = ToolParser.TOOL_NAMES.map(n =>
             n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         ).join('|');
@@ -103,6 +104,9 @@ class ToolParser {
         let cursor = 0;
         let m;
         while ((m = nameRegex.exec(text)) !== null) {
+            const lineStart = text.lastIndexOf('\n', m.index - 1) + 1;
+            if (text.slice(lineStart, m.index).trim()) continue;
+
             const tool = m[1].trim();
             const searchStart = m.index + m[0].length;
             nameRegex.lastIndex = searchStart;
@@ -114,24 +118,42 @@ class ToolParser {
             if (jsonStr) {
                 const parsed = ToolParser._parseParams(tool, jsonStr);
                 if (parsed) {
+                    const jsonStart = searchStart + snippet.indexOf(jsonStr);
+                    if (lastJsonEnd !== null) {
+                        const gap = text.slice(lastJsonEnd, jsonStart);
+                        const nextCallMarker = new RegExp('^\\s*(?:' + toolPattern + ')[ \\t]*\\r?\\n[ \\t]*$');
+                        if (gap.trim() && !nextCallMarker.test(gap)) invalidSequence = true;
+                    }
                     calls.push(parsed);
-                    const jsonEnd = searchStart + snippet.indexOf(jsonStr) + jsonStr.length;
+                    const jsonEnd = jsonStart + jsonStr.length;
+                    lastJsonEnd = jsonEnd;
                     nameRegex.lastIndex = jsonEnd;
-                    cursor = jsonEnd;
                     continue;
                 }
             }
-            cursor = searchStart;
-            nameRegex.lastIndex = cursor;
+            nameRegex.lastIndex = searchStart;
         }
+        if (!calls.length || invalidSequence || text.slice(lastJsonEnd).trim()) return [];
         return calls;
     }
 
     static _extractJsonBraces(str) {
         let depth = 0;
         let start = -1;
+        let inString = false;
+        let escaped = false;
         for (let i = 0; i < str.length; i++) {
             const ch = str[i];
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch === '\\') escaped = true;
+                else if (ch === '"') inString = false;
+                continue;
+            }
+            if (ch === '"') {
+                inString = true;
+                continue;
+            }
             if (ch === '{') {
                 if (depth === 0) start = i;
                 depth++;

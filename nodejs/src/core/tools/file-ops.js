@@ -13,11 +13,18 @@ const { DiffFormatter } = require('../../ui/diff');
  * @param {import('./index').ToolRegistry} registry - Tool registry instance
  */
 function registerFileOps(registry) {
+    const resolveWorkspacePath = (filePath) => sandboxPath(
+        filePath,
+        registry.session?.workingDir || process.cwd()
+    );
+
     // --- Read file ---
     registry.register('read_file',
         async ({ path: filePath }) => {
             try {
-                return fs.readFileSync(filePath, 'utf-8');
+                const { ok, resolved, error } = resolveWorkspacePath(filePath);
+                if (!ok) return `Error: ${error}`;
+                return fs.readFileSync(resolved, 'utf-8');
             } catch (e) {
                 return `Error: ${e.message}`;
             }
@@ -74,7 +81,9 @@ function registerFileOps(registry) {
     registry.register('list_dir',
         async ({ path: dirPath = '.' }) => {
             try {
-                const files = fs.readdirSync(dirPath);
+                const { ok, resolved, error } = resolveWorkspacePath(dirPath);
+                if (!ok) return `Error: ${error}`;
+                const files = fs.readdirSync(resolved);
                 return files.join('\n');
             } catch (e) {
                 return `Error: ${e.message}`;
@@ -93,6 +102,9 @@ function registerFileOps(registry) {
                 return `Error: invalid regex pattern: ${e.message}`;
             }
             try {
+                const { ok, resolved, error } = resolveWorkspacePath(searchPath);
+                if (!ok) return `Error: ${error}`;
+                searchPath = resolved;
                 const matches = [];
                 const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__']);
                 const deadline = Date.now() + 5000;
@@ -150,6 +162,9 @@ function registerFileOps(registry) {
     registry.register('find_files',
         async ({ pattern, path: searchPath = '.' }) => {
             try {
+                const { ok, resolved, error } = resolveWorkspacePath(searchPath);
+                if (!ok) return `Error: ${error}`;
+                searchPath = resolved;
                 // Convert glob pattern to regex (supports *, ?, and literals)
                 const escapeRegex = (s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&');
                 const reSrc = '^' + escapeRegex(pattern).replace(/\\\*/g, '.*').replace(/\\\?/g, '.') + '$';
@@ -249,7 +264,9 @@ function registerFileOps(registry) {
     registry.register('read_lines',
         async ({ path: filePath, start, end }) => {
             try {
-                const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+                const { ok, resolved, error } = resolveWorkspacePath(filePath);
+                if (!ok) return `Error: ${error}`;
+                const lines = fs.readFileSync(resolved, 'utf-8').split('\n');
                 const startIdx = start < 0 ? lines.length + start : start - 1;
                 const endIdx = end < 0 ? lines.length + end + 1 : end;
 

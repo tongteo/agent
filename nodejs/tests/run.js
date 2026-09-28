@@ -95,7 +95,7 @@ const start = Date.now();
 (async () => {
 for (const file of testFiles) {
   const filePath = path.join(testDir, file);
-  const label = file.replace(/^test-/, '').replace(/\\.js$/, '');
+  const label = file.replace(/^test-/, '').replace(/\.js$/, '');
   console.log(`  [${label}]\n`);
 
   try {

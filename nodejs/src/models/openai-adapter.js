@@ -1,19 +1,20 @@
 /**
  * @fileoverview OpenAI-compatible Streaming Adapter
  *
- * Connects to any OpenAI-compatible API endpoint (OmniRoute, OpenRouter,
- * local vLLM, Ollama, etc.) via /v1/chat/completions with SSE streaming.
+ * Connects to 9Router by default (http://127.0.0.1:20128/v1), or any other
+ * OpenAI-compatible endpoint, via /chat/completions with SSE streaming.
  *
  * Supports: streaming, function calling (tools), usage tracking,
  * response-level KV caching, and API-level prompt caching markers.
  *
  * Env vars:
  *   OPENAI_API_KEY   — API key (required)
- *   OPENAI_BASE_URL  — Base URL, defaults to https://api.openai.com/v1
- *   OPENAI_MODEL     — Model name, defaults to gpt-4o-mini
+ *   OPENAI_BASE_URL  — Base URL, defaults to the local 9Router endpoint
+ *   OPENAI_MODEL     — Model name, defaults to the 9Router Kiro example
  */
 
 const _fetch = require('node-fetch');
+const { StringDecoder } = require('string_decoder');
 const { KVCache } = require('../core/kv-cache');
 
 /** Transient network errors worth retrying. */
@@ -43,6 +44,16 @@ function _isRetryableStatus(res) {
   return res.status === 429 || res.status >= 500;
 }
 
+function _retryDelayMs(retryAfter, fallbackMs) {
+  if (!retryAfter) return fallbackMs;
+  const value = String(retryAfter).trim();
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30000);
+  const retryAt = Date.parse(value);
+  if (Number.isFinite(retryAt)) return Math.min(Math.max(0, retryAt - Date.now()), 30000);
+  return fallbackMs;
+}
+
 class OpenAIAdapter {
   /**
    * @param {Object} [opts]
@@ -60,9 +71,9 @@ class OpenAIAdapter {
    */
   constructor(opts = {}) {
     this.apiKey  = opts.apiKey  || process.env.OPENAI_API_KEY  || '';
-    this.baseUrl = (opts.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-    this.model   = opts.model   || process.env.OPENAI_MODEL     || 'gpt-4o-mini';
-    this.maxTokens = opts.maxTokens || 16384;
+    this.baseUrl = (opts.baseUrl || process.env.OPENAI_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/+$/, '');
+    this.model   = opts.model   || process.env.OPENAI_MODEL     || 'kr/claude-sonnet-4.5';
+    this.maxTokens = opts.maxTokens ?? 16384;
 
     /** @type {Array<{role: string, content: string}>} */
     this.messages = [];
@@ -80,6 +91,8 @@ class OpenAIAdapter {
 
     /** AbortController for cancelling in-flight streams */
     this._abortController = null;
+    /** Whether the current request has already emitted visible output */
+    this._responseHadOutput = false;
 
     /** Max retries for transient fetch errors */
     this._maxRetries = opts.maxRetries ?? 3;
@@ -101,7 +114,7 @@ class OpenAIAdapter {
     this._promptCacheControl = opts.promptCacheControl || false;
 
     if (!this.apiKey) {
-      throw new Error('No API key. Set OPENAI_API_KEY in .env or pass apiKey option.');
+      throw new Error('No 9Router API key. Copy the key from the 9Router dashboard and set OPENAI_API_KEY in .env or pass apiKey option.');
     }
   }
 
@@ -222,6 +235,7 @@ class OpenAIAdapter {
 
     // ── Cache miss — stream from API (with retry) ──
     const body = this._buildRequestBody();
+    this._responseHadOutput = false;
     let lastError;
 
     for (let attempt = 0; attempt <= this._maxRetries; attempt++) {
@@ -258,7 +272,7 @@ class OpenAIAdapter {
       if (_isRetryableStatus(res) && attempt < this._maxRetries) {
         const delay = 1000 * Math.pow(2, attempt);
         const retryAfter = res.headers?.get?.('retry-after');
-        const waitMs = retryAfter ? Math.min(parseInt(retryAfter, 10) * 1000, 30000) : delay;
+        const waitMs = _retryDelayMs(retryAfter, delay);
         process.stderr.write(`  ⚠ API ${res.status} — retrying in ${waitMs / 1000}s (${attempt + 1}/${this._maxRetries})\n`);
         res.body?.resume?.(); // drain body to free socket
         await new Promise(r => setTimeout(r, waitMs));
@@ -277,6 +291,9 @@ class OpenAIAdapter {
         return;
       } catch (e) {
         if (e.name === 'AbortError') return;
+        if (this._responseHadOutput) {
+          throw new Error(`Stream interrupted after partial output; automatic retry was skipped to avoid duplicate text. ${e.message}`);
+        }
         lastError = e;
         if (_isTransient(e) && attempt < this._maxRetries) {
           const delay = 1000 * Math.pow(2, attempt);
@@ -298,56 +315,91 @@ class OpenAIAdapter {
    */
   async *_streamSSE(res) {
     const reader = res.body;
+    if (!reader) throw new Error('API response has no body.');
+    const decoder = new StringDecoder('utf8');
     let buffer = '';
+    let rawResponse = '';
     let fullText = '';
     const toolCallMap = new Map();
     let sawDataEvent = false;
+    let done = false;
+
+    const applyPayload = (parsed) => {
+      if (parsed?.error) {
+        const errMsg = typeof parsed.error === 'string'
+          ? parsed.error
+          : parsed.error.message || JSON.stringify(parsed.error);
+        throw new Error(`API error in stream: ${errMsg}`);
+      }
+      if (parsed?.usage) this.lastUsage = parsed.usage;
+
+      const delta = parsed?.choices?.[0]?.delta;
+      if (!delta) return '';
+      let text = '';
+      if (typeof delta.content === 'string' && delta.content) {
+        text = delta.content;
+        fullText += text;
+        this._responseHadOutput = true;
+      }
+
+      if (delta.tool_calls && this._toolsEnabled) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          if (!toolCallMap.has(idx)) {
+            toolCallMap.set(idx, {
+              id: tc.id || '',
+              name: tc.function?.name || '',
+              arguments: '',
+            });
+          }
+          const existing = toolCallMap.get(idx);
+          if (tc.id) existing.id = tc.id;
+          if (tc.function?.name) existing.name = tc.function.name;
+          if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+        }
+      }
+      return text;
+    };
+
+    const consumeLine = (line) => {
+      if (!line.startsWith('data:')) return { text: '', done: false };
+      sawDataEvent = true;
+      rawResponse = '';
+      const data = line.slice(5).replace(/^ /, '');
+      if (data === '[DONE]') return { text: '', done: true };
+      let parsed;
+      try { parsed = JSON.parse(data); } catch { return { text: '', done: false }; }
+      return { text: applyPayload(parsed), done: false };
+    };
 
     for await (const chunk of reader) {
-      buffer += chunk.toString();
+      const decoded = decoder.write(chunk);
+      if (!sawDataEvent && rawResponse.length < 65536) {
+        rawResponse += decoded.slice(0, 65536 - rawResponse.length);
+      }
+      buffer += decoded;
 
       while (buffer.includes('\n')) {
         const nlIdx = buffer.indexOf('\n');
         const line = buffer.slice(0, nlIdx).replace(/\r$/, '');
         buffer = buffer.slice(nlIdx + 1);
+        const event = consumeLine(line);
+        if (event.text) yield event.text;
+        if (event.done) { done = true; break; }
+      }
+      if (done) break;
+    }
 
-        if (line.startsWith('data: ')) {
-          sawDataEvent = true;
-          const data = line.slice(6);
-          if (data === '[DONE]') break;
-
-          let parsed;
-          try { parsed = JSON.parse(data); } catch { continue; }
-
-          if (parsed.usage) {
-            this.lastUsage = parsed.usage;
-          }
-
-          const delta = parsed.choices?.[0]?.delta;
-          if (!delta) continue;
-
-          if (delta.content) {
-            fullText += delta.content;
-            yield delta.content;
-          }
-
-          if (delta.tool_calls && this._toolsEnabled) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              if (!toolCallMap.has(idx)) {
-                toolCallMap.set(idx, {
-                  id: tc.id || '',
-                  name: tc.function?.name || '',
-                  arguments: '',
-                });
-              }
-              const existing = toolCallMap.get(idx);
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name = tc.function.name;
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-            }
-          }
-        }
+    if (!done) {
+      const tail = decoder.end();
+      buffer += tail;
+      if (!sawDataEvent && rawResponse.length < 65536) {
+        rawResponse += tail.slice(0, 65536 - rawResponse.length);
+      }
+      if (buffer) {
+        const event = consumeLine(buffer.replace(/\r$/, ''));
+        if (event.text) yield event.text;
+        done = event.done;
       }
     }
 
@@ -355,7 +407,7 @@ class OpenAIAdapter {
     // When the entire body is consumed and no SSE data events were found,
     // the body was likely a plain JSON error. Parse and surface it.
     if (!sawDataEvent) {
-      const bodyText = (buffer || '').trim();
+      const bodyText = rawResponse.trim();
       if (bodyText) {
         let errPayload;
         try { errPayload = JSON.parse(bodyText); } catch {}
@@ -403,6 +455,7 @@ class OpenAIAdapter {
     this.messages = [];
     this.lastUsage = null;
     this.pendingToolCalls = null;
+    this.clearCache();
   }
 
   /** Clean up resources. */
@@ -426,6 +479,15 @@ class OpenAIAdapter {
   /** Clear the response cache. */
   clearCache() {
     this._cache?.clear();
+  }
+
+  /** Change the active model and invalidate cached responses. */
+  setModel(model) {
+    const nextModel = String(model || '').trim();
+    if (!nextModel) throw new Error('Model name cannot be empty.');
+    this.model = nextModel;
+    this.clearCache();
+    return this.model;
   }
 }
 
